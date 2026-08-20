@@ -1,0 +1,55 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:DSHSharp.ViewModels"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d" d:DesignWidth="1000" d:DesignHeight="680"
+        x:Class="DSHSharp.Views.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Icon="/Assets/avalonia-logo.ico"
+        Title="DSH-Sharp"
+        Width="1000" Height="680"
+        MinWidth="720" MinHeight="480"
+        WindowStartupLocation="CenterScreen">
+
+    <Design.DataContext>
+        <!-- This only sets the DataContext for the previewer in an IDE,
+             to set the actual DataContext for runtime, set the DataContext property in code (look at App.axaml.cs) -->
+        <vm:MainWindowViewModel/>
+    </Design.DataContext>
+
+    <DockPanel>
+
+        <!-- 状态栏 -->
+        <Border DockPanel.Dock="Bottom" Padding="12,6"
+                BorderThickness="0,1,0,0"
+                BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}">
+            <TextBlock Text="{Binding StatusText}" FontSize="12"
+                       Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+        </Border>
+
+        <!-- 主内容区 -->
+        <Grid RowDefinitions="Auto,*">
+
+            <!-- 标题区 -->
+            <StackPanel Grid.Row="0" Margin="24,28,24,16" Spacing="6">
+                <TextBlock Text="{Binding AppName}" FontSize="28" FontWeight="SemiBold"/>
+                <TextBlock Text="{Binding Subtitle}" FontSize="14"
+                           Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+                <TextBlock Text="{Binding Version}" FontSize="12"
+                           Foreground="{DynamicResource SystemControlForegroundBaseLowBrush}"/>
+            </StackPanel>
+
+            <!-- 内容占位区 -->
+            <Border Grid.Row="1" Margin="24,0,24,24" Padding="16" CornerRadius="8"
+                    BorderThickness="1"
+                    BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}">
+                <TextBlock Text="项目骨架已就绪，等待开发…"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                           Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+            </Border>
+
+        </Grid>
+    </DockPanel>
+
+</Window>
