@@ -1,6 +1,7 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:DSHSharp.ViewModels"
+        xmlns:chrome="using:Avalonia.Controls.Chrome"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d" d:DesignWidth="1000" d:DesignHeight="680"
@@ -10,7 +11,29 @@
         Title="DSH-Sharp"
         Width="1000" Height="680"
         MinWidth="720" MinHeight="480"
-        WindowStartupLocation="CenterScreen">
+        WindowStartupLocation="CenterScreen"
+        ExtendClientAreaToDecorationsHint="True"
+        WindowDecorations="None">
+
+    <Window.Styles>
+        <!-- 自定义标题栏窗口按钮 -->
+        <Style Selector="Button.window-btn">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Width" Value="46"/>
+            <Setter Property="Height" Value="36"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="CornerRadius" Value="0"/>
+            <Setter Property="Padding" Value="0"/>
+        </Style>
+        <Style Selector="Button.window-btn:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundBaseLowBrush}"/>
+        </Style>
+        <Style Selector="Button.window-btn.close:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="#C42B1C"/>
+        </Style>
+    </Window.Styles>
 
     <Design.DataContext>
         <!-- This only sets the DataContext for the previewer in an IDE,
@@ -18,38 +41,78 @@
         <vm:MainWindowViewModel/>
     </Design.DataContext>
 
-    <DockPanel>
+    <Grid RowDefinitions="36,*,Auto">
 
-        <!-- 状态栏 -->
-        <Border DockPanel.Dock="Bottom" Padding="12,6"
+        <!-- ===== 自定义标题栏（ElementRole=TitleBar 提供拖动） ===== -->
+        <Border Grid.Row="0"
+                chrome:WindowDecorationProperties.ElementRole="TitleBar"
+                Background="{DynamicResource SystemControlBackgroundChromeMediumBrush}"
+                PointerPressed="TitleBar_OnPointerPressed"
+                DoubleTapped="TitleBar_OnDoubleTapped">
+            <Grid ColumnDefinitions="Auto,*,Auto">
+                <StackPanel Grid.Column="0" Margin="12,0" Orientation="Horizontal" Spacing="8"
+                            VerticalAlignment="Center">
+                    <TextBlock Text="DSH-Sharp" FontSize="13" FontWeight="SemiBold"
+                               VerticalAlignment="Center"/>
+                    <TextBlock Text="{Binding Version}" FontSize="11"
+                               Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"
+                               VerticalAlignment="Center"/>
+                </StackPanel>
+
+                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="0">
+                    <Button Classes="window-btn" Click="MinimizeButton_OnClick"
+                            ToolTip.Tip="最小化">
+                        <Path Data="M 0,0 L 10,0" Stroke="{DynamicResource SystemControlForegroundBaseHighBrush}"
+                              StrokeThickness="1.2" VerticalAlignment="Center"/>
+                    </Button>
+                    <Button Classes="window-btn" Click="MaximizeButton_OnClick"
+                            ToolTip.Tip="最大化/还原">
+                        <Path Data="M 0.5,0.5 L 9.5,0.5 L 9.5,9.5 L 0.5,9.5 Z"
+                              Stroke="{DynamicResource SystemControlForegroundBaseHighBrush}"
+                              StrokeThickness="1.2" VerticalAlignment="Center"/>
+                    </Button>
+                    <Button Classes="window-btn close" Click="CloseButton_OnClick"
+                            ToolTip.Tip="关闭">
+                        <Path Data="M 0,0 L 10,10 M 10,0 L 0,10"
+                              Stroke="{DynamicResource SystemControlForegroundBaseHighBrush}"
+                              StrokeThickness="1.2" VerticalAlignment="Center"/>
+                    </Button>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- ===== DSH WebUI ===== -->
+        <Border Grid.Row="1">
+            <NativeWebView x:Name="Web"/>
+        </Border>
+
+        <!-- ===== 状态栏 ===== -->
+        <Border Grid.Row="2" Padding="12,5"
+                Background="{DynamicResource SystemControlBackgroundChromeMediumBrush}"
                 BorderThickness="0,1,0,0"
                 BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}">
-            <TextBlock Text="{Binding StatusText}" FontSize="12"
+            <TextBlock Text="{Binding ServiceStatusText}" FontSize="12"
                        Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
         </Border>
 
-        <!-- 主内容区 -->
-        <Grid RowDefinitions="Auto,*">
-
-            <!-- 标题区 -->
-            <StackPanel Grid.Row="0" Margin="24,28,24,16" Spacing="6">
-                <TextBlock Text="{Binding AppName}" FontSize="28" FontWeight="SemiBold"/>
-                <TextBlock Text="{Binding Subtitle}" FontSize="14"
-                           Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
-                <TextBlock Text="{Binding Version}" FontSize="12"
-                           Foreground="{DynamicResource SystemControlForegroundBaseLowBrush}"/>
+        <!-- ===== 通知横幅（覆盖层） ===== -->
+        <Border x:Name="NotificationBanner" Grid.RowSpan="3"
+                IsVisible="False" IsHitTestVisible="True"
+                HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                Margin="12" Padding="14,10" MaxWidth="460"
+                CornerRadius="8" BorderThickness="1"
+                Background="{DynamicResource SystemControlBackgroundChromeMediumBrush}"
+                BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
+                PointerPressed="NotificationBanner_OnPointerPressed">
+            <StackPanel Spacing="4">
+                <TextBlock x:Name="NotificationTitleText" FontSize="13" FontWeight="SemiBold"
+                           TextTrimming="CharacterEllipsis"/>
+                <TextBlock x:Name="NotificationMessageText" FontSize="12"
+                           Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"
+                           TextWrapping="Wrap" MaxLines="2"/>
             </StackPanel>
+        </Border>
 
-            <!-- 内容占位区 -->
-            <Border Grid.Row="1" Margin="24,0,24,24" Padding="16" CornerRadius="8"
-                    BorderThickness="1"
-                    BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}">
-                <TextBlock Text="项目骨架已就绪，等待开发…"
-                           HorizontalAlignment="Center" VerticalAlignment="Center"
-                           Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
-            </Border>
-
-        </Grid>
-    </DockPanel>
+    </Grid>
 
 </Window>
