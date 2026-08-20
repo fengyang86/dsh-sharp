@@ -1,0 +1,17 @@
+# 统一行尾：所有文本文件在仓库内使用 LF，检出时按平台转换。
+* text=auto
+
+# 明确 LF（仓库内与检出均为 LF）
+*.cs text eol=lf
+*.axaml text eol=lf
+*.csproj text eol=lf
+*.props text eol=lf
+*.slnx text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+
+# 二进制
+*.ico binary
+*.png binary
+*.jpg binary
+*.dll binary
