@@ -38,4 +38,16 @@ public sealed class AppSettings
 
     /// <summary>源码部署仓库路径（ManagedMode=Source 时使用）。</summary>
     public string? SourcePath { get; set; }
+
+    /// <summary>上次窗口位置/大小（null 表示未记录，使用默认布局）。</summary>
+    public double? WindowLeft { get; set; }
+
+    public double? WindowTop { get; set; }
+
+    public double? WindowWidth { get; set; }
+
+    public double? WindowHeight { get; set; }
+
+    /// <summary>上次窗口是否最大化。</summary>
+    public bool WindowMaximized { get; set; }
 }

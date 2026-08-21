@@ -29,11 +29,14 @@ public partial class App : Application
     private readonly IAutoStartService _autoStart = AutoStartServiceFactory.Create();
     private DshEventMonitor? _monitor;
     private DshServiceManager? _serviceManager;
+    private DshApiClient? _apiClient;
     private MainWindow? _mainWindow;
     private SettingsWindow? _settingsWindow;
     private TrayIcon? _trayIcon;
     private NativeMenu? _trayMenu;
     private NativeMenuItem? _trayServiceItem;
+    private NativeMenuItem? _traySessionsItem;
+    private Timer? _sessionRefreshTimer;
     private bool _isExiting;
     private bool _serviceOnline;
     private bool _isStarting;
@@ -120,9 +123,38 @@ public partial class App : Application
         _monitor?.Dispose();
         // 仅终止本客户端拉起的服务进程（外部服务不受影响）。
         _serviceManager?.Dispose();
+        _sessionRefreshTimer?.Dispose();
+        SaveWindowState();
         _trayIcon?.Dispose();
         _trayIcon = null;
         Log("app OnExit finished");
+    }
+
+    /// <summary>把主窗口位置/大小/最大化状态写入设置并持久化。</summary>
+    private void SaveWindowState()
+    {
+        if (_mainWindow is null || !_mainWindow.IsVisible)
+        {
+            return;
+        }
+
+        Settings.WindowMaximized = _mainWindow.WindowState == WindowState.Maximized;
+        if (_mainWindow.WindowState == WindowState.Normal)
+        {
+            Settings.WindowLeft = _mainWindow.Position.X;
+            Settings.WindowTop = _mainWindow.Position.Y;
+            Settings.WindowWidth = _mainWindow.Width;
+            Settings.WindowHeight = _mainWindow.Height;
+        }
+
+        try
+        {
+            _settingsService.Save(Settings);
+        }
+        catch (Exception ex)
+        {
+            Log($"window state save failed: {ex.Message}");
+        }
     }
 
     private void SetupServiceManager()
@@ -268,9 +300,16 @@ public partial class App : Application
         settingsItem.Click += (_, _) => SafePost("tray:settings", OpenSettingsWindow);
         menu.Items.Add(settingsItem);
         menu.Items.Add(new NativeMenuItemSeparator());
+        _traySessionsItem = new NativeMenuItem("最近会话");
+        _traySessionsItem.Menu = new NativeMenu();
+        menu.Items.Add(_traySessionsItem);
+        menu.Items.Add(new NativeMenuItemSeparator());
         _trayServiceItem = new NativeMenuItem("本地服务");
         _trayServiceItem.Click += (_, _) => SafePost("tray:service", OnTrayServiceClick);
         menu.Items.Add(_trayServiceItem);
+        var aboutItem = new NativeMenuItem("关于 DSH-Sharp");
+        aboutItem.Click += (_, _) => SafePost("tray:about", ShowAbout);
+        menu.Items.Add(aboutItem);
         menu.Items.Add(new NativeMenuItemSeparator());
         var exitItem = new NativeMenuItem("退出");
         exitItem.Click += (_, _) => SafePost("tray:exit", RequestShutdown);
@@ -286,6 +325,79 @@ public partial class App : Application
         };
         _trayIcon.Clicked += (_, _) => SafePost("tray:clicked", ActivateMainWindow);
         RefreshTrayMenu();
+        StartSessionRefresh();
+    }
+
+    /// <summary>启动会话列表定时刷新（60s 间隔，首次 5s 后）。</summary>
+    private void StartSessionRefresh()
+    {
+        _apiClient = new DshApiClient(Settings.WebUrl);
+        _sessionRefreshTimer?.Dispose();
+        _sessionRefreshTimer = new Timer(
+            _ => _ = RefreshSessionsAsync(),
+            null,
+            TimeSpan.FromSeconds(5),
+            TimeSpan.FromSeconds(60));
+    }
+
+    /// <summary>拉取会话列表并更新托盘"最近会话"子菜单。</summary>
+    private async Task RefreshSessionsAsync()
+    {
+        var client = _apiClient;
+        if (client is null || !_serviceOnline)
+        {
+            return;
+        }
+
+        IReadOnlyList<DshSessionSummary> sessions;
+        try
+        {
+            sessions = await client.ListSessionsAsync();
+        }
+        catch (Exception ex)
+        {
+            Log($"session list refresh failed: {ex.Message}");
+            return;
+        }
+
+        Dispatcher.UIThread.Post(() =>
+        {
+            var menu = _traySessionsItem?.Menu;
+            if (menu is null)
+            {
+                return;
+            }
+
+            menu.Items.Clear();
+            if (sessions.Count == 0)
+            {
+                menu.Items.Add(new NativeMenuItem("（暂无会话）") { IsEnabled = false });
+                return;
+            }
+
+            foreach (var session in sessions.Take(8))
+            {
+                var title = string.IsNullOrEmpty(session.Title)
+                    ? ShortId(session.SessionId)
+                    : session.Title;
+                if (title.Length > 24)
+                {
+                    title = title[..24] + "…";
+                }
+
+                var item = new NativeMenuItem((session.Running ? "● " : "") + title);
+                item.Click += (_, _) => SafePost("tray:session", ActivateMainWindow);
+                menu.Items.Add(item);
+            }
+        });
+    }
+
+    /// <summary>托盘"关于"：弹出版本信息 Toast。</summary>
+    private void ShowAbout()
+    {
+        _mainWindow?.ShowNotification(
+            "DSH-Sharp",
+            $"版本 {new MainWindowViewModel(Settings).Version}\nDeepSeek Harness 桌面客户端（.NET 10 + Avalonia）");
     }
 
     private void OnTrayServiceClick()
@@ -406,39 +518,56 @@ public partial class App : Application
             return;
         }
 
-        Dispatcher.UIThread.Post(() =>
+        // 后台线程异步获取会话标题与最后回复开头，再回 UI 线程弹 Toast。
+        _ = Task.Run(async () =>
         {
+            string title;
+            string? preview = null;
             try
             {
-                if (_mainWindow is null)
-                {
-                    Log("session completed: main window is null, skip toast");
-                    return;
-                }
-
-                var title = string.IsNullOrEmpty(e.Title)
-                    ? $"会话 {ShortId(e.SessionId)}"
-                    : e.Title;
-                Log($"session completed: showing toast '{title}'");
-
-                // 通知音效（可配置开关）。
-                if (Settings.NotificationSoundEnabled)
-                {
-                    Services.NotificationSound.Play();
-                }
-
-                _mainWindow.ShowNotification("会话已完成", title);
-
-                // 窗口驻留托盘时自动唤起，确保用户看到通知。
-                if (!_mainWindow.IsVisible)
-                {
-                    ActivateMainWindow();
-                }
+                var client = new DshApiClient(Settings.WebUrl);
+                title = string.IsNullOrEmpty(e.Title) ? ShortId(e.SessionId) : e.Title;
+                preview = await client.GetLastAssistantTextAsync(e.SessionId);
             }
             catch (Exception ex)
             {
-                Log($"session completed toast failed: {ex}");
+                Log($"session completion preview failed: {ex.Message}");
+                title = string.IsNullOrEmpty(e.Title) ? ShortId(e.SessionId) : e.Title;
             }
+
+            var finalTitle = title;
+            var finalPreview = preview;
+            Dispatcher.UIThread.Post(() =>
+            {
+                try
+                {
+                    if (_mainWindow is null)
+                    {
+                        Log("session completed: main window is null, skip toast");
+                        return;
+                    }
+
+                    Log($"session completed: showing toast '{finalTitle}', preview='{finalPreview}'");
+
+                    // 通知音效（可配置开关）。
+                    if (Settings.NotificationSoundEnabled)
+                    {
+                        Services.NotificationSound.Play();
+                    }
+
+                    _mainWindow.ShowNotification("会话已完成", finalTitle, finalPreview);
+
+                    // 窗口驻留托盘时自动唤起，确保用户看到通知。
+                    if (!_mainWindow.IsVisible)
+                    {
+                        ActivateMainWindow();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log($"session completed toast failed: {ex}");
+                }
+            });
         });
     }
 

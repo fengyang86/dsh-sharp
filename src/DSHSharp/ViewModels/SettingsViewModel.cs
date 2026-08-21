@@ -84,6 +84,22 @@ public partial class SettingsViewModel : ViewModelBase
     [RelayCommand]
     private void Cancel() => CloseRequested?.Invoke();
 
+    /// <summary>把字段重置为默认值（需再点"保存"生效）。</summary>
+    [RelayCommand]
+    private void RestoreDefaults()
+    {
+        var defaults = new AppSettings();
+        WebUrl = defaults.WebUrl;
+        ManagedMode = defaults.ManagedMode;
+        SourcePath = defaults.SourcePath ?? string.Empty;
+        AutoStartEnabled = defaults.AutoStartEnabled;
+        CloseToTray = defaults.CloseToTray;
+        StartMinimized = defaults.StartMinimized;
+        SessionCompleteNotifications = defaults.SessionCompleteNotifications;
+        NotificationSoundEnabled = defaults.NotificationSoundEnabled;
+        Theme = defaults.Theme;
+    }
+
     /// <summary>关闭窗口请求（由窗口订阅）。</summary>
     public event Action? CloseRequested;
 

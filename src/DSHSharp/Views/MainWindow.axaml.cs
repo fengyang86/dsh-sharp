@@ -30,7 +30,34 @@ public partial class MainWindow : Window
         Web.Source = new Uri(_settings.WebUrl);
 
         WindowStateProperty.Changed.AddClassHandler<Window>(OnWindowStateChanged);
+        Opened += (_, _) => RestoreWindowState();
         Closing += OnClosing;
+    }
+
+    /// <summary>启动时恢复上次的窗口位置/大小/最大化状态。</summary>
+    private void RestoreWindowState()
+    {
+        var settings = App.Instance?.Settings;
+        if (settings is null)
+        {
+            return;
+        }
+
+        if (settings.WindowWidth is > 0 && settings.WindowHeight is > 0)
+        {
+            Width = settings.WindowWidth.Value;
+            Height = settings.WindowHeight.Value;
+        }
+
+        if (settings.WindowLeft is not null && settings.WindowTop is not null)
+        {
+            Position = new PixelPoint((int)settings.WindowLeft.Value, (int)settings.WindowTop.Value);
+        }
+
+        if (settings.WindowMaximized)
+        {
+            WindowState = WindowState.Maximized;
+        }
     }
 
     private void OnWindowStateChanged(Window window, AvaloniaPropertyChangedEventArgs e) =>
@@ -45,13 +72,16 @@ public partial class MainWindow : Window
         ToolTip.SetTip(MaximizeButton, isMaximized ? "还原" : "最大化");
     }
 
-    /// <summary>显示"会话完成"等通知：置顶 Toast 小窗口（WebView2 原生表面不会遮挡独立窗口）。</summary>
-    public void ShowNotification(string title, string message)
+    /// <summary>
+    /// 显示"会话完成"等通知：置顶 Toast 小窗口。
+    /// 标题为会话名，内容为回复开头预览（可空）。
+    /// </summary>
+    public void ShowNotification(string title, string message, string? preview = null)
     {
         try
         {
             _toast?.Close();
-            _toast = new ToastWindow(title, message);
+            _toast = new ToastWindow(title, message, preview);
             _toast.Show();
             App.Log($"toast shown: '{title}'");
         }
