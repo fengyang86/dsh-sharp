@@ -10,9 +10,6 @@ namespace DSHSharp.Core.Services;
 /// </summary>
 public sealed class SingleInstanceService : IDisposable
 {
-    private const string MutexName = @"Local\DSHSharp.SingleInstance";
-    private const string ActivateEventName = @"Local\DSHSharp.Activate";
-
     private readonly Mutex _mutex;
     private readonly EventWaitHandle _activateEvent;
     private Thread? _listenerThread;
@@ -21,11 +18,13 @@ public sealed class SingleInstanceService : IDisposable
     /// <summary>当前进程是否为第一个实例。</summary>
     public bool IsFirstInstance { get; }
 
-    public SingleInstanceService()
+    /// <param name="namePrefix">命名互斥体前缀（默认 DSHSharp；测试可传隔离前缀避免与应用实例冲突）。</param>
+    public SingleInstanceService(string? namePrefix = null)
     {
-        _mutex = new Mutex(initiallyOwned: false, MutexName, out bool createdNew);
+        var prefix = string.IsNullOrWhiteSpace(namePrefix) ? "DSHSharp" : namePrefix;
+        _mutex = new Mutex(initiallyOwned: false, $@"Local\{prefix}.SingleInstance", out bool createdNew);
         IsFirstInstance = createdNew;
-        _activateEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ActivateEventName);
+        _activateEvent = new EventWaitHandle(false, EventResetMode.AutoReset, $@"Local\{prefix}.Activate");
     }
 
     /// <summary>通知首实例唤起主窗口（由第二实例调用）。</summary>

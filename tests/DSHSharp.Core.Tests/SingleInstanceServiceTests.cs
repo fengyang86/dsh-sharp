@@ -4,10 +4,13 @@ namespace DSHSharp.Core.Tests;
 
 public sealed class SingleInstanceServiceTests
 {
+    // 隔离前缀：避免与正在运行的应用实例（Local\DSHSharp.* 互斥体）冲突。
+    private static readonly string Prefix = "DSHSharp.Tests." + Guid.NewGuid().ToString("N");
+
     [Fact]
     public void FirstInstance_IsFirst()
     {
-        using var service = new SingleInstanceService();
+        using var service = new SingleInstanceService(Prefix);
 
         Assert.True(service.IsFirstInstance);
     }
@@ -15,10 +18,10 @@ public sealed class SingleInstanceServiceTests
     [Fact]
     public void SecondInstance_IsNotFirst_And_NotifiesFirstInstance()
     {
-        using var first = new SingleInstanceService();
+        using var first = new SingleInstanceService(Prefix);
         Assert.True(first.IsFirstInstance);
 
-        using var second = new SingleInstanceService();
+        using var second = new SingleInstanceService(Prefix);
         Assert.False(second.IsFirstInstance);
 
         using var activated = new ManualResetEventSlim();
@@ -32,8 +35,8 @@ public sealed class SingleInstanceServiceTests
     [Fact]
     public void Notifications_Arrive_AfterPriorConsumption()
     {
-        using var first = new SingleInstanceService();
-        using var second = new SingleInstanceService();
+        using var first = new SingleInstanceService(Prefix);
+        using var second = new SingleInstanceService(Prefix);
 
         var count = 0;
         using var gate = new ManualResetEventSlim();
