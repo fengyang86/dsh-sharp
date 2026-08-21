@@ -74,3 +74,7 @@ dotnet test DSHSharp.slnx
 ## 许可
 
 [MIT](LICENSE)
+
+> 应用图标（`src/DSHSharp/Assets/avalonia-logo.ico`）使用 DSH 官方 favicon 图形，
+> 来源：[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) `apps/web/public/favicon.svg`，
+> 生成脚本见 `tools/gen-icons/`。
