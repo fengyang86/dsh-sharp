@@ -21,6 +21,7 @@ public partial class SettingsViewModel : ViewModelBase
         CloseToTray = current.CloseToTray;
         StartMinimized = current.StartMinimized;
         SessionCompleteNotifications = current.SessionCompleteNotifications;
+        NotificationSoundEnabled = current.NotificationSoundEnabled;
         Theme = current.Theme;
     }
 
@@ -53,6 +54,9 @@ public partial class SettingsViewModel : ViewModelBase
     private bool _sessionCompleteNotifications;
 
     [ObservableProperty]
+    private bool _notificationSoundEnabled;
+
+    [ObservableProperty]
     private string _theme;
 
     /// <summary>保存设置并关闭窗口。</summary>
@@ -69,6 +73,7 @@ public partial class SettingsViewModel : ViewModelBase
             CloseToTray = CloseToTray,
             StartMinimized = StartMinimized,
             SessionCompleteNotifications = SessionCompleteNotifications,
+            NotificationSoundEnabled = NotificationSoundEnabled,
             Theme = Theme,
         };
         _save(updated);

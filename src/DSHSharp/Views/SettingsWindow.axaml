@@ -62,6 +62,7 @@
                     <ToggleSwitch Content="关闭窗口时最小化到托盘" IsChecked="{Binding CloseToTray}"/>
                     <ToggleSwitch Content="启动时最小化到托盘" IsChecked="{Binding StartMinimized}"/>
                     <ToggleSwitch Content="会话完成时弹出通知" IsChecked="{Binding SessionCompleteNotifications}"/>
+                    <ToggleSwitch Content="通知附带提示音" IsChecked="{Binding NotificationSoundEnabled}"/>
                     <StackPanel Spacing="6" Margin="0,8,0,0">
                         <TextBlock Text="主题"/>
                         <ComboBox ItemsSource="{Binding Themes}" SelectedItem="{Binding Theme}"

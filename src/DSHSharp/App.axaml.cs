@@ -420,6 +420,13 @@ public partial class App : Application
                     ? $"会话 {ShortId(e.SessionId)}"
                     : e.Title;
                 Log($"session completed: showing toast '{title}'");
+
+                // 通知音效（可配置开关）。
+                if (Settings.NotificationSoundEnabled)
+                {
+                    Services.NotificationSound.Play();
+                }
+
                 _mainWindow.ShowNotification("会话已完成", title);
 
                 // 窗口驻留托盘时自动唤起，确保用户看到通知。

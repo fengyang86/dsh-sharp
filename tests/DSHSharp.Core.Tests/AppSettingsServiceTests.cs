@@ -16,6 +16,7 @@ public sealed class AppSettingsServiceTests : IDisposable
         Assert.Equal(AppSettings.DefaultWebUrl, settings.WebUrl);
         Assert.True(settings.CloseToTray);
         Assert.True(settings.SessionCompleteNotifications);
+        Assert.True(settings.NotificationSoundEnabled);
         Assert.Equal("System", settings.Theme);
     }
 
@@ -31,6 +32,7 @@ public sealed class AppSettingsServiceTests : IDisposable
             StartMinimized = true,
             Theme = "Dark",
             SessionCompleteNotifications = false,
+            NotificationSoundEnabled = false,
         };
 
         service.Save(settings);
@@ -42,6 +44,7 @@ public sealed class AppSettingsServiceTests : IDisposable
         Assert.True(loaded.StartMinimized);
         Assert.Equal("Dark", loaded.Theme);
         Assert.False(loaded.SessionCompleteNotifications);
+        Assert.False(loaded.NotificationSoundEnabled);
     }
 
     [Fact]
