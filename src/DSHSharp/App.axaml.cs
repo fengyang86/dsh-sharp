@@ -400,6 +400,7 @@ public partial class App : Application
 
     private void OnSessionCompleted(object? sender, SessionCompletedEventArgs e)
     {
+        Log($"session completed event: session={e.SessionId}, title={e.Title}, notificationsEnabled={Settings.SessionCompleteNotifications}");
         if (!Settings.SessionCompleteNotifications)
         {
             return;
@@ -407,20 +408,29 @@ public partial class App : Application
 
         Dispatcher.UIThread.Post(() =>
         {
-            if (_mainWindow is null)
+            try
             {
-                return;
+                if (_mainWindow is null)
+                {
+                    Log("session completed: main window is null, skip toast");
+                    return;
+                }
+
+                var title = string.IsNullOrEmpty(e.Title)
+                    ? $"会话 {ShortId(e.SessionId)}"
+                    : e.Title;
+                Log($"session completed: showing toast '{title}'");
+                _mainWindow.ShowNotification("会话已完成", title);
+
+                // 窗口驻留托盘时自动唤起，确保用户看到通知。
+                if (!_mainWindow.IsVisible)
+                {
+                    ActivateMainWindow();
+                }
             }
-
-            var title = string.IsNullOrEmpty(e.Title)
-                ? $"会话 {ShortId(e.SessionId)}"
-                : e.Title;
-            _mainWindow.ShowNotification("会话已完成", title);
-
-            // 窗口驻留托盘时自动唤起，确保用户看到通知。
-            if (!_mainWindow.IsVisible)
+            catch (Exception ex)
             {
-                ActivateMainWindow();
+                Log($"session completed toast failed: {ex}");
             }
         });
     }

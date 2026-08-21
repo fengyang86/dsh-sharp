@@ -42,8 +42,6 @@ public sealed class DshEventMonitor : IAsyncDisposable
     private readonly string _wsScheme;
     private readonly CancellationTokenSource _cts = new();
     private readonly ConcurrentDictionary<string, string> _sessionTitles = new(StringComparer.Ordinal);
-    private readonly SessionCompletionTracker _tracker = new();
-    private Task? _hostTask;
     private Task? _muxTask;
     private Task? _heartbeatTask;
 
@@ -53,7 +51,7 @@ public sealed class DshEventMonitor : IAsyncDisposable
         _wsScheme = _baseUri.Scheme == Uri.UriSchemeHttps ? "wss" : "ws";
     }
 
-    /// <summary>会话完成（running true→false 翻转，去重）。</summary>
+    /// <summary>会话回合完成（mux 流 turn/end + reason.kind=completed）。</summary>
     public event EventHandler<SessionCompletedEventArgs>? SessionCompleted;
 
     /// <summary>DSH 服务在线状态变化（心跳探测）。</summary>
@@ -61,8 +59,7 @@ public sealed class DshEventMonitor : IAsyncDisposable
 
     public void Start()
     {
-        _hostTask = Task.Run(() => RunStreamLoopAsync(host: true, _cts.Token));
-        _muxTask = Task.Run(() => RunStreamLoopAsync(host: false, _cts.Token));
+        _muxTask = Task.Run(() => RunStreamLoopAsync(_cts.Token));
         _heartbeatTask = Task.Run(() => RunHeartbeatLoopAsync(_cts.Token));
     }
 
@@ -84,7 +81,7 @@ public sealed class DshEventMonitor : IAsyncDisposable
         _cts.Cancel();
         try
         {
-            var tasks = new[] { _hostTask, _muxTask, _heartbeatTask }
+            var tasks = new[] { _muxTask, _heartbeatTask }
                 .Where(t => t is not null)
                 .Cast<Task>()
                 .ToArray();
@@ -103,7 +100,7 @@ public sealed class DshEventMonitor : IAsyncDisposable
         Log?.Invoke("DshEventMonitor.DisposeAsync: done");
     }
 
-    private async Task RunStreamLoopAsync(bool host, CancellationToken ct)
+    private async Task RunStreamLoopAsync(CancellationToken ct)
     {
         var backoff = BackoffMin;
         while (!ct.IsCancellationRequested)
@@ -111,9 +108,9 @@ public sealed class DshEventMonitor : IAsyncDisposable
             try
             {
                 using var ws = new ClientWebSocket();
-                await ws.ConnectAsync(StreamUri(host), ct);
+                await ws.ConnectAsync(StreamUri(), ct);
                 backoff = BackoffMin;
-                await PumpStreamAsync(ws, host, ct);
+                await PumpStreamAsync(ws, ct);
             }
             catch (OperationCanceledException)
             {
@@ -137,7 +134,7 @@ public sealed class DshEventMonitor : IAsyncDisposable
         }
     }
 
-    private async Task PumpStreamAsync(ClientWebSocket ws, bool host, CancellationToken ct)
+    private async Task PumpStreamAsync(ClientWebSocket ws, CancellationToken ct)
     {
         var buffer = new byte[64 * 1024];
         var received = new MemoryStream();
@@ -158,33 +155,27 @@ public sealed class DshEventMonitor : IAsyncDisposable
             while (!result.EndOfMessage);
 
             var json = Encoding.UTF8.GetString(received.GetBuffer(), 0, (int)received.Length);
-            HandleFrame(host, json);
+            HandleFrame(json);
         }
     }
 
-    private void HandleFrame(bool host, string json)
+    private void HandleFrame(string json)
     {
-        if (host)
+        // session/title：缓存标题（通知内容用）。
+        var title = DshFrameParser.TryParseSessionTitle(json);
+        if (title is not null)
         {
-            var status = DshFrameParser.TryParseHostSessionStatus(json);
-            if (status is null)
-            {
-                return;
-            }
-
-            if (_tracker.OnSessionStatus(status.Value.SessionId, status.Value.Running))
-            {
-                _sessionTitles.TryGetValue(status.Value.SessionId, out var title);
-                SessionCompleted?.Invoke(this, new SessionCompletedEventArgs(status.Value.SessionId, title));
-            }
+            _sessionTitles[title.Value.SessionId] = title.Value.Title;
         }
-        else
+
+        // turn/end + completed：一次任务完成 → 完成通知。
+        var turnEnd = DshFrameParser.TryParseTurnEnd(json);
+        if (turnEnd is not null &&
+            string.Equals(turnEnd.Value.ReasonKind, "completed", StringComparison.Ordinal))
         {
-            var title = DshFrameParser.TryParseSessionTitle(json);
-            if (title is not null)
-            {
-                _sessionTitles[title.Value.SessionId] = title.Value.Title;
-            }
+            _sessionTitles.TryGetValue(turnEnd.Value.SessionId, out var sessionTitle);
+            Log?.Invoke($"turn/end completed: session={turnEnd.Value.SessionId}");
+            SessionCompleted?.Invoke(this, new SessionCompletedEventArgs(turnEnd.Value.SessionId, sessionTitle));
         }
     }
 
@@ -230,10 +221,9 @@ public sealed class DshEventMonitor : IAsyncDisposable
         }
     }
 
-    private Uri StreamUri(bool host)
+    private Uri StreamUri()
     {
-        var path = host ? "api/events.host" : "api/events.mux";
-        var builder = new UriBuilder(_baseUri) { Scheme = _wsScheme, Path = path };
+        var builder = new UriBuilder(_baseUri) { Scheme = _wsScheme, Path = "api/events.mux" };
         return builder.Uri;
     }
 }

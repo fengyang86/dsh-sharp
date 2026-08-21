@@ -48,9 +48,17 @@ public partial class MainWindow : Window
     /// <summary>显示"会话完成"等通知：置顶 Toast 小窗口（WebView2 原生表面不会遮挡独立窗口）。</summary>
     public void ShowNotification(string title, string message)
     {
-        _toast?.Close();
-        _toast = new ToastWindow(title, message);
-        _toast.Show();
+        try
+        {
+            _toast?.Close();
+            _toast = new ToastWindow(title, message);
+            _toast.Show();
+            App.Log($"toast shown: '{title}'");
+        }
+        catch (Exception ex)
+        {
+            App.Log($"toast show failed: {ex}");
+        }
     }
 
     /// <summary>服务离线时隐藏 WebView（其原生表面会遮挡引导页），在线时恢复。</summary>

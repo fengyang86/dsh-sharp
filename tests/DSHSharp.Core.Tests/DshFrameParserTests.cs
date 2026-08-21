@@ -4,53 +4,7 @@ namespace DSHSharp.Core.Tests;
 
 public sealed class DshFrameParserTests
 {
-    [Fact]
-    public void Parses_HostSessionStatus_Running()
-    {
-        const string json = """
-            {"type":"server-request","rpcId":"r1","method":"events.host",
-             "payload":{"type":"host/session-status","sessionId":"sess-1","running":true}}
-            """;
-
-        var frame = DshFrameParser.TryParseHostSessionStatus(json);
-
-        Assert.True(frame.HasValue);
-        Assert.Equal("sess-1", frame.Value.SessionId);
-        Assert.True(frame.Value.Running);
-    }
-
-    [Fact]
-    public void Parses_HostSessionStatus_Idle()
-    {
-        const string json = """
-            {"type":"server-request","rpcId":"r2","method":"events.host",
-             "payload":{"type":"host/session-status","sessionId":"sess-2","running":false}}
-            """;
-
-        var frame = DshFrameParser.TryParseHostSessionStatus(json);
-
-        Assert.True(frame.HasValue);
-        Assert.Equal("sess-2", frame.Value.SessionId);
-        Assert.False(frame.Value.Running);
-    }
-
-    [Fact]
-    public void Ignores_NonStatus_HostFrames()
-    {
-        const string json = """
-            {"type":"server-request","rpcId":"r3","method":"events.host",
-             "payload":{"type":"host/session-added","sessionId":"sess-3","blank":true}}
-            """;
-
-        Assert.Null(DshFrameParser.TryParseHostSessionStatus(json));
-    }
-
-    [Fact]
-    public void Ignores_MalformedJson()
-    {
-        Assert.Null(DshFrameParser.TryParseHostSessionStatus("{not json"));
-        Assert.Null(DshFrameParser.TryParseSessionTitle("{not json"));
-    }
+    // SessionEvent 信封格式：{ type, seq, time, data }，内容位于 data。
 
     [Fact]
     public void Parses_SessionTitle_FromMux()
@@ -58,7 +12,8 @@ public sealed class DshFrameParserTests
         const string json = """
             {"type":"server-request","rpcId":"r4","method":"events.mux",
              "payload":{"type":"session/event","sessionId":"sess-4",
-                        "event":{"type":"session/title","title":"分析日志文件"}}}
+                        "event":{"type":"session/title","seq":5,"time":123,
+                                 "data":{"title":"分析日志文件"}}}}
             """;
 
         var title = DshFrameParser.TryParseSessionTitle(json);
@@ -74,55 +29,62 @@ public sealed class DshFrameParserTests
         const string json = """
             {"type":"server-request","rpcId":"r5","method":"events.mux",
              "payload":{"type":"session/event","sessionId":"sess-5",
-                        "event":{"type":"turn/end","turn":1,"reason":{"kind":"completed"}}}}
+                        "event":{"type":"turn/end","seq":6,"time":124,
+                                 "data":{"turn":1,"reason":{"kind":"completed"}}}}}
             """;
 
         Assert.Null(DshFrameParser.TryParseSessionTitle(json));
     }
-}
 
-public sealed class SessionCompletionTrackerTests
-{
     [Fact]
-    public void RunningToIdle_TriggersCompletionOnce()
+    public void Parses_TurnEnd_Completed()
     {
-        var tracker = new SessionCompletionTracker();
+        const string json = """
+            {"type":"server-request","rpcId":"r6","method":"events.mux",
+             "payload":{"type":"session/event","sessionId":"sess-6",
+                        "event":{"type":"turn/end","seq":7,"time":125,
+                                 "data":{"turn":2,"reason":{"kind":"completed"}}}}}
+            """;
 
-        Assert.False(tracker.OnSessionStatus("s1", running: true));
-        Assert.True(tracker.OnSessionStatus("s1", running: false));
+        var turnEnd = DshFrameParser.TryParseTurnEnd(json);
 
-        // 重复 idle 不重复触发。
-        Assert.False(tracker.OnSessionStatus("s1", running: false));
+        Assert.True(turnEnd.HasValue);
+        Assert.Equal("sess-6", turnEnd.Value.SessionId);
+        Assert.Equal("completed", turnEnd.Value.ReasonKind);
     }
 
     [Fact]
-    public void IdleWithoutRunning_NeverTriggers()
+    public void Parses_TurnEnd_Cancelled()
     {
-        var tracker = new SessionCompletionTracker();
+        const string json = """
+            {"type":"server-request","rpcId":"r7","method":"events.mux",
+             "payload":{"type":"session/event","sessionId":"sess-7",
+                        "event":{"type":"turn/end","seq":8,"time":126,
+                                 "data":{"turn":1,"reason":{"kind":"cancelled"}}}}}
+            """;
 
-        Assert.False(tracker.OnSessionStatus("s2", running: false));
+        var turnEnd = DshFrameParser.TryParseTurnEnd(json);
+
+        Assert.True(turnEnd.HasValue);
+        Assert.Equal("cancelled", turnEnd.Value.ReasonKind);
     }
 
     [Fact]
-    public void Complete_ThenRunAgain_CompletesAgain()
+    public void Ignores_TurnStart_AsTurnEnd()
     {
-        var tracker = new SessionCompletionTracker();
+        const string json = """
+            {"type":"server-request","rpcId":"r8","method":"events.mux",
+             "payload":{"type":"session/event","sessionId":"sess-8",
+                        "event":{"type":"turn/start","seq":9,"time":127,"data":{"turn":1}}}}
+            """;
 
-        tracker.OnSessionStatus("s3", running: true);
-        Assert.True(tracker.OnSessionStatus("s3", running: false));
-
-        tracker.OnSessionStatus("s3", running: true);
-        Assert.True(tracker.OnSessionStatus("s3", running: false));
+        Assert.Null(DshFrameParser.TryParseTurnEnd(json));
     }
 
     [Fact]
-    public void RunningSessions_ReflectsLatestState()
+    public void Ignores_MalformedJson()
     {
-        var tracker = new SessionCompletionTracker();
-        tracker.OnSessionStatus("a", running: true);
-        tracker.OnSessionStatus("b", running: true);
-        tracker.OnSessionStatus("a", running: false);
-
-        Assert.Equal(["b"], tracker.RunningSessions);
+        Assert.Null(DshFrameParser.TryParseSessionTitle("{not json"));
+        Assert.Null(DshFrameParser.TryParseTurnEnd("{not json"));
     }
 }
