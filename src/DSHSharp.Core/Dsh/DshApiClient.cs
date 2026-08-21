@@ -36,6 +36,23 @@ public sealed class DshApiClient
         return DshRpcParser.ParseLastAssistantText(json);
     }
 
+    /// <summary>获取当前运行服务的 DSH 版本（host.describe → value.version）。</summary>
+    public async Task<string?> GetVersionAsync(CancellationToken ct = default)
+    {
+        var json = await PostRpcAsync("host.describe", new { }, ct);
+        return DshRpcParser.ParseDescribeVersion(json);
+    }
+
+    /// <summary>查询 npm 上 @deepseek-ai/dsh 的最新稳定版本（registry /latest）。</summary>
+    public async Task<string?> GetNpmLatestVersionAsync(CancellationToken ct = default)
+    {
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+        using var response = await http.GetAsync("https://registry.npmjs.org/@deepseek-ai/dsh/latest", ct);
+        response.EnsureSuccessStatusCode();
+        var json = await response.Content.ReadAsStringAsync(ct);
+        return DshRpcParser.ParseNpmLatestVersion(json);
+    }
+
     private async Task<string> PostRpcAsync(string method, object payload, CancellationToken ct)
     {
         using var http = new HttpClient(new SocketsHttpHandler { UseProxy = false })
@@ -115,6 +132,49 @@ public static class DshRpcParser
         return result
             .OrderByDescending(s => s.UpdatedAt)
             .ToList();
+    }
+
+    /// <summary>从 <c>host.describe</c> 响应中提取版本号。</summary>
+    public static string? ParseDescribeVersion(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            if (root.TryGetProperty("result", out var resultEl) &&
+                resultEl.TryGetProperty("ok", out var okEl) &&
+                okEl.GetBoolean() &&
+                resultEl.TryGetProperty("value", out var valueEl) &&
+                valueEl.TryGetProperty("version", out var versionEl))
+            {
+                return versionEl.GetString();
+            }
+        }
+        catch (JsonException)
+        {
+            // 解析失败：返回 null。
+        }
+
+        return null;
+    }
+
+    /// <summary>从 npm registry <c>/latest</c> 响应中提取版本号。</summary>
+    public static string? ParseNpmLatestVersion(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.TryGetProperty("version", out var versionEl))
+            {
+                return versionEl.GetString();
+            }
+        }
+        catch (JsonException)
+        {
+            // 解析失败：返回 null。
+        }
+
+        return null;
     }
 
     /// <summary>

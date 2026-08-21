@@ -9,18 +9,24 @@ public partial class SettingsViewModel : ViewModelBase
     private readonly Action<AppSettings> _save;
     private readonly Action _startService;
     private readonly Action _stopService;
+    private readonly Func<Task<string>> _checkVersion;
+    private readonly Action _updateService;
 
     public SettingsViewModel(
         AppSettings current,
         string serviceStatusText,
         Action<AppSettings> save,
         Action startService,
-        Action stopService)
+        Action stopService,
+        Func<Task<string>>? checkVersion = null,
+        Action? updateService = null)
     {
         ArgumentNullException.ThrowIfNull(current);
         _save = save;
         _startService = startService;
         _stopService = stopService;
+        _checkVersion = checkVersion ?? (() => Task.FromResult("版本检查不可用"));
+        _updateService = updateService ?? (() => { });
 
         ServiceStatusText = serviceStatusText;
         WebUrl = current.WebUrl;
@@ -116,6 +122,39 @@ public partial class SettingsViewModel : ViewModelBase
     /// <summary>立即停止客户端托管的本地服务。</summary>
     [RelayCommand]
     private void StopService() => _stopService();
+
+    /// <summary>检查 DSH 版本更新（运行版 + 模式对应最新版）。</summary>
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(CheckUpdateCommand))]
+    private bool _isCheckingUpdate;
+
+    [ObservableProperty]
+    private string _versionInfoText = string.Empty;
+
+    [RelayCommand(CanExecute = nameof(CanCheckUpdate))]
+    private async Task CheckUpdate()
+    {
+        IsCheckingUpdate = true;
+        VersionInfoText = "正在检查版本…";
+        try
+        {
+            VersionInfoText = await _checkVersion();
+        }
+        catch (Exception ex)
+        {
+            VersionInfoText = $"版本检查失败：{ex.Message}";
+        }
+        finally
+        {
+            IsCheckingUpdate = false;
+        }
+    }
+
+    private bool CanCheckUpdate() => !IsCheckingUpdate;
+
+    /// <summary>按托管模式更新服务（npx 重启拉新 / 源码提示 git pull）。</summary>
+    [RelayCommand]
+    private void UpdateService() => _updateService();
 
     /// <summary>关闭窗口请求（由窗口订阅）。</summary>
     public event Action? CloseRequested;

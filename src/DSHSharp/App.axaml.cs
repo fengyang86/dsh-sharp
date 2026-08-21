@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
@@ -222,7 +223,9 @@ public partial class App : Application
                 BuildServiceStatusText(),
                 SaveSettings,
                 () => _ = StartManagedServiceAsync(),
-                StopManagedService));
+                StopManagedService,
+                CheckDshVersionAsync,
+                UpdateManagedService));
             _settingsWindow.Closed += (_, _) => _settingsWindow = null;
             _settingsWindow.Show();
         });
@@ -615,6 +618,128 @@ public partial class App : Application
         }
 
         RefreshTrayMenu();
+    }
+
+    /// <summary>
+    /// 检查 DSH 版本：当前运行版本 + 按托管模式查询最新版本（npx→npm registry；源码→git 远端）。
+    /// 返回可直接展示的文本。
+    /// </summary>
+    public async Task<string> CheckDshVersionAsync()
+    {
+        var api = _apiClient ?? new DshApiClient(Settings.WebUrl);
+        string? current;
+        try
+        {
+            current = await api.GetVersionAsync();
+        }
+        catch (Exception ex)
+        {
+            return $"版本检查失败：{ex.Message}";
+        }
+
+        current ??= "未知";
+        try
+        {
+            if (string.Equals(Settings.ManagedMode, "Source", StringComparison.OrdinalIgnoreCase))
+            {
+                var repo = Settings.SourcePath;
+                if (string.IsNullOrEmpty(repo))
+                {
+                    return $"运行版本：{current}（源码模式未配置路径）";
+                }
+
+                var local = await GitHeadAsync(repo, remote: false);
+                var remote = await GitHeadAsync(repo, remote: true);
+                var localShort = local is null ? "未知" : local[..Math.Min(8, local.Length)];
+                var remoteShort = remote is null ? "未知" : remote[..Math.Min(8, remote.Length)];
+                if (remote is not null && local == remote)
+                {
+                    return $"运行版本：{current}（源码 {localShort}，已是最新）";
+                }
+
+                return remote is null
+                    ? $"运行版本：{current}（源码 {localShort}；远端检查失败，无网络或未配置 remote）"
+                    : $"运行版本：{current}（源码 {localShort} → 远端 {remoteShort}，需要 git pull）";
+            }
+
+            var latest = await api.GetNpmLatestVersionAsync();
+            if (latest is null)
+            {
+                return $"运行版本：{current}（最新版查询失败，请检查网络）";
+            }
+
+            return current == latest
+                ? $"运行版本：{current}（已是最新）"
+                : $"运行版本：{current}，最新：{latest}（重启托管服务即更新）";
+        }
+        catch (Exception ex)
+        {
+            return $"运行版本：{current}（更新检查失败：{ex.Message}）";
+        }
+    }
+
+    /// <summary>更新服务：npx 模式=停止并重启托管（拉取最新包）；源码模式=提示 git pull。</summary>
+    public void UpdateManagedService()
+    {
+        if (string.Equals(Settings.ManagedMode, "Source", StringComparison.OrdinalIgnoreCase))
+        {
+            _mainWindow?.ShowNotification(
+                "源码模式更新",
+                $"请在 {Settings.SourcePath ?? "源码路径"} 执行 git pull 更新源码，\n然后停止/启动本地服务或重启客户端。");
+            return;
+        }
+
+        Log("updating npx-managed service: stop and restart");
+        _serviceManager?.Stop();
+        _portScanDone = false;
+        _ = StartManagedServiceAsync();
+    }
+
+    /// <summary>读取 git 仓库 HEAD：本地 rev-parse 或远端 ls-remote（短超时，失败返回 null）。</summary>
+    private static async Task<string?> GitHeadAsync(string repoPath, bool remote)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = "git",
+                WorkingDirectory = repoPath,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            psi.ArgumentList.Add(remote ? "ls-remote" : "rev-parse");
+            if (remote)
+            {
+                psi.ArgumentList.Add("origin");
+                psi.ArgumentList.Add("HEAD");
+            }
+            else
+            {
+                psi.ArgumentList.Add("HEAD");
+            }
+
+            using var process = Process.Start(psi);
+            if (process is null)
+            {
+                return null;
+            }
+
+            var output = await process.StandardOutput.ReadToEndAsync();
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(15));
+            if (process.ExitCode != 0)
+            {
+                return null;
+            }
+
+            var line = output.Trim();
+            return remote ? line.Split('\t')[0] : line;
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or TimeoutException or InvalidOperationException)
+        {
+            return null;
+        }
     }
 
     /// <summary>设置页显示的当前服务状态卡片文本（地址/模式/状态/错误）。</summary>
