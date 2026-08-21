@@ -7,11 +7,20 @@ namespace DSHSharp.ViewModels;
 public partial class SettingsViewModel : ViewModelBase
 {
     private readonly Action<AppSettings> _save;
+    private readonly Action _startService;
+    private readonly Action _stopService;
 
-    public SettingsViewModel(AppSettings current, string serviceStatusText, Action<AppSettings> save)
+    public SettingsViewModel(
+        AppSettings current,
+        string serviceStatusText,
+        Action<AppSettings> save,
+        Action startService,
+        Action stopService)
     {
         ArgumentNullException.ThrowIfNull(current);
         _save = save;
+        _startService = startService;
+        _stopService = stopService;
 
         ServiceStatusText = serviceStatusText;
         WebUrl = current.WebUrl;
@@ -99,6 +108,14 @@ public partial class SettingsViewModel : ViewModelBase
         NotificationSoundEnabled = defaults.NotificationSoundEnabled;
         Theme = defaults.Theme;
     }
+
+    /// <summary>立即启动/重试托管本地服务（无需保存设置）。</summary>
+    [RelayCommand]
+    private void StartService() => _startService();
+
+    /// <summary>立即停止客户端托管的本地服务。</summary>
+    [RelayCommand]
+    private void StopService() => _stopService();
 
     /// <summary>关闭窗口请求（由窗口订阅）。</summary>
     public event Action? CloseRequested;

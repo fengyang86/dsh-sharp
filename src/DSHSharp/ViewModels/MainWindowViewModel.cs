@@ -20,17 +20,29 @@ public partial class MainWindowViewModel : ViewModelBase
     /// <summary>嵌入的 DSH WebUI 地址。</summary>
     public string WebUrl { get; }
 
-    /// <summary>状态栏文本（服务连接状态）。</summary>
+    /// <summary>状态栏文本（服务连接状态：地址 + 模式 + 状态）。</summary>
     [ObservableProperty]
     private string _serviceStatusText = "正在连接 DSH 服务…";
 
-    /// <summary>更新服务状态栏：在线/离线、是否客户端托管、是否正在启动。</summary>
-    public void SetServiceState(bool online, bool owned, bool starting)
+    /// <summary>
+    /// 更新服务状态栏，展示当前连接的服务身份：
+    /// 地址、托管模式、在线/离线、是否客户端托管。
+    /// </summary>
+    public void SetServiceState(bool online, bool owned, bool starting, string webUrl, string managedMode)
     {
+        var modeText = managedMode switch
+        {
+            "None" => "不托管",
+            "Source" => "源码托管",
+            _ => "npx 托管",
+        };
+
         ServiceStatusText = starting
-            ? "正在启动本地 DSH 服务…"
+            ? $"正在启动 {webUrl}（{modeText}）…"
             : online
-                ? owned ? "● DSH 服务在线（客户端托管）" : "● DSH 服务在线"
-                : "○ DSH 服务离线";
+                ? owned
+                    ? $"● {webUrl} · 在线（{modeText}·客户端启动）"
+                    : $"● {webUrl} · 在线（外部运行）"
+                : $"○ {webUrl} · 离线";
     }
 }

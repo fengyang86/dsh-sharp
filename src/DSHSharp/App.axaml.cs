@@ -217,7 +217,12 @@ public partial class App : Application
                 return;
             }
 
-            _settingsWindow = new SettingsWindow(new SettingsViewModel(Settings, BuildServiceStatusText(), SaveSettings));
+            _settingsWindow = new SettingsWindow(new SettingsViewModel(
+                Settings,
+                BuildServiceStatusText(),
+                SaveSettings,
+                () => _ = StartManagedServiceAsync(),
+                StopManagedService));
             _settingsWindow.Closed += (_, _) => _settingsWindow = null;
             _settingsWindow.Show();
         });
@@ -243,15 +248,6 @@ public partial class App : Application
         SetupDshMonitor();
         _mainWindow?.ReloadWeb(url);
         UpdateServiceUi();
-    }
-
-    /// <summary>设置页显示的当前服务状态文本。</summary>
-    private string BuildServiceStatusText()
-    {
-        var owned = _serviceManager?.IsOwned ?? false;
-        return _serviceOnline
-            ? owned ? "● 服务在线（客户端托管中）" : "● 服务在线（外部运行，无需托管）"
-            : "○ 服务离线（将按下方托管模式自动启动）";
     }
 
     /// <summary>保存设置：即时应用可生效项，持久化，提示重启生效项。</summary>
@@ -603,7 +599,7 @@ public partial class App : Application
         }
 
         var owned = _serviceManager?.IsOwned ?? false;
-        vm.SetServiceState(_serviceOnline, owned, _isStarting);
+        vm.SetServiceState(_serviceOnline, owned, _isStarting, Settings.WebUrl, Settings.ManagedMode);
 
         // 离线时隐藏 WebView（原生表面会遮挡引导页），在线时恢复。
         _mainWindow.SetWebViewVisible(_serviceOnline);
@@ -619,6 +615,29 @@ public partial class App : Application
         }
 
         RefreshTrayMenu();
+    }
+
+    /// <summary>设置页显示的当前服务状态卡片文本（地址/模式/状态/错误）。</summary>
+    private string BuildServiceStatusText()
+    {
+        var modeText = Settings.ManagedMode switch
+        {
+            "None" => "不托管（仅探测）",
+            "Source" => "源码托管（pnpm/node）",
+            _ => "npx 托管（官方包）",
+        };
+
+        var status = _serviceManager?.IsOwned ?? false
+            ? "托管中（客户端已启动服务）"
+            : _serviceOnline
+                ? "在线（外部运行）"
+                : _isStarting
+                    ? "正在启动…"
+                    : "离线";
+
+        var error = _serviceManager?.LastError;
+        var errorLine = string.IsNullOrEmpty(error) ? "" : $"\n最近错误：{error}";
+        return $"● {Settings.WebUrl}\n托管模式：{modeText}\n状态：{status}{errorLine}";
     }
 
     private string BuildOnboardingDetail()

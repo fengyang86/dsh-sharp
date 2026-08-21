@@ -9,7 +9,7 @@ public partial class SettingsWindow : Window
 {
     /// <summary>供 XAML 运行时加载器/设计器使用。</summary>
     public SettingsWindow()
-        : this(new SettingsViewModel(new Core.Configuration.AppSettings(), string.Empty, _ => { }))
+        : this(new SettingsViewModel(new Core.Configuration.AppSettings(), string.Empty, _ => { }, () => { }, () => { }))
     {
     }
 
