@@ -12,7 +12,7 @@ namespace DSHSharp.Views;
 public partial class MainWindow : Window
 {
     private readonly AppSettings _settings;
-    private CancellationTokenSource? _notificationCts;
+    private ToastWindow? _toast;
 
     /// <summary>供 XAML 运行时加载器/设计器使用。</summary>
     public MainWindow()
@@ -26,6 +26,7 @@ public partial class MainWindow : Window
         InitializeComponent();
 
         DataContext = new MainWindowViewModel(settings);
+
         Web.Source = new Uri(_settings.WebUrl);
 
         WindowStateProperty.Changed.AddClassHandler<Window>(OnWindowStateChanged);
@@ -44,46 +45,39 @@ public partial class MainWindow : Window
         ToolTip.SetTip(MaximizeButton, isMaximized ? "还原" : "最大化");
     }
 
-    /// <summary>显示"会话完成"等通知横幅，5 秒后自动淡出。</summary>
+    /// <summary>显示"会话完成"等通知：置顶 Toast 小窗口（WebView2 原生表面不会遮挡独立窗口）。</summary>
     public void ShowNotification(string title, string message)
     {
-        NotificationTitleText.Text = title;
-        NotificationMessageText.Text = message;
-        NotificationBanner.IsVisible = true;
-        NotificationBanner.Opacity = 0;
-        NotificationBanner.Transitions ??= new Transitions
-        {
-            new DoubleTransition { Property = OpacityProperty, Duration = TimeSpan.FromMilliseconds(180) },
-        };
-        NotificationBanner.Opacity = 1;
-
-        _notificationCts?.Cancel();
-        _notificationCts = new CancellationTokenSource();
-        _ = AutoHideAsync(_notificationCts.Token);
+        _toast?.Close();
+        _toast = new ToastWindow(title, message);
+        _toast.Show();
     }
 
-    private async Task AutoHideAsync(CancellationToken ct)
-    {
-        try
-        {
-            await Task.Delay(TimeSpan.FromSeconds(5), ct);
-        }
-        catch (OperationCanceledException)
-        {
-            return;
-        }
+    /// <summary>服务离线时隐藏 WebView（其原生表面会遮挡引导页），在线时恢复。</summary>
+    public void SetWebViewVisible(bool visible) => Web.IsVisible = visible;
 
-        await Dispatcher.UIThread.InvokeAsync(HideNotification);
+    /// <summary>重载 WebView 到新地址（服务地址切换）。</summary>
+    public void ReloadWeb(string url) => Web.Source = new Uri(url);
+
+    /// <summary>显示端口纠错提示：发现其他端口有服务时建议切换。</summary>
+    public void ShowPortHint(int port, Action<int> onSwitch)
+    {
+        _portHintPort = port;
+        _portSwitchAction = onSwitch;
+        PortHintText.Text = $"检测到 127.0.0.1:{port} 上有 DSH 服务，但当前配置指向 {App.Instance?.Settings.WebUrl ?? ""}。是否切换到 {port} 端口？";
+        PortHintPanel.IsVisible = true;
+        PortSwitchButton.IsEnabled = true;
     }
 
-    private void HideNotification()
+    private Action<int>? _portSwitchAction;
+    private int _portHintPort;
+
+    private void PortSwitchButton_OnClick(object? sender, RoutedEventArgs e)
     {
-        _notificationCts?.Cancel();
-        if (NotificationBanner.IsVisible)
-        {
-            NotificationBanner.Opacity = 0;
-            NotificationBanner.IsVisible = false;
-        }
+        PortSwitchButton.IsEnabled = false;
+        var action = _portSwitchAction;
+        _portSwitchAction = null;
+        action?.Invoke(_portHintPort);
     }
 
     /// <summary>显示/隐藏"未检测到服务"引导页。</summary>
@@ -175,12 +169,4 @@ public partial class MainWindow : Window
             : WindowState.Maximized;
 
     private void CloseButton_OnClick(object? sender, RoutedEventArgs e) => Close();
-
-    // ---- 通知横幅 ----
-
-    private void NotificationBanner_OnPointerPressed(object? sender, PointerPressedEventArgs e)
-    {
-        HideNotification();
-        App.Instance?.ActivateMainWindow();
-    }
 }

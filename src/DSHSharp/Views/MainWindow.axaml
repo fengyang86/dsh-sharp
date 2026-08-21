@@ -115,6 +115,16 @@
                            HorizontalAlignment="Center"/>
                 <TextBlock x:Name="OnboardingDetailText" TextWrapping="Wrap" TextAlignment="Center"
                            FontSize="13" Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+                <Border x:Name="PortHintPanel" IsVisible="False" Padding="12,10" CornerRadius="6"
+                        BorderThickness="1"
+                        BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}">
+                    <StackPanel Spacing="8">
+                        <TextBlock x:Name="PortHintText" TextWrapping="Wrap" TextAlignment="Center"
+                                   FontSize="12"/>
+                        <Button x:Name="PortSwitchButton" Content="切换到该地址" Padding="16,5"
+                                HorizontalAlignment="Center" Click="PortSwitchButton_OnClick"/>
+                    </StackPanel>
+                </Border>
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="8">
                     <Button x:Name="StartServiceButton" Content="启动本地服务" Padding="16,6"
                             Click="StartServiceButton_OnClick"/>
@@ -130,24 +140,6 @@
                 BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}">
             <TextBlock Text="{Binding ServiceStatusText}" FontSize="12"
                        Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
-        </Border>
-
-        <!-- ===== 通知横幅（覆盖层） ===== -->
-        <Border x:Name="NotificationBanner" Grid.RowSpan="3"
-                IsVisible="False" IsHitTestVisible="True"
-                HorizontalAlignment="Left" VerticalAlignment="Bottom"
-                Margin="12" Padding="14,10" MaxWidth="460"
-                CornerRadius="8" BorderThickness="1"
-                Background="{DynamicResource SystemControlBackgroundChromeMediumBrush}"
-                BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
-                PointerPressed="NotificationBanner_OnPointerPressed">
-            <StackPanel Spacing="4">
-                <TextBlock x:Name="NotificationTitleText" FontSize="13" FontWeight="SemiBold"
-                           TextTrimming="CharacterEllipsis"/>
-                <TextBlock x:Name="NotificationMessageText" FontSize="12"
-                           Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"
-                           TextWrapping="Wrap" MaxLines="2"/>
-            </StackPanel>
         </Border>
 
     </Grid>

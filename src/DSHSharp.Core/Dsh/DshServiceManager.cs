@@ -64,8 +64,39 @@ public sealed class DshServiceManager : IDisposable
     /// <summary>托管进程意外退出时触发（服务崩溃）。</summary>
     public event EventHandler? ProcessExitedUnexpectedly;
 
-    /// <summary>探测服务是否在线（收到任意 HTTP 响应即视为在线）。本地服务不走系统代理。</summary>
+    /// <summary>常见 DSH/开发服务端口（用于配置端口错误时的纠错扫描）。</summary>
+    private static readonly int[] CommonPorts = [3080, 3000, 8080, 8000];
+
+    /// <summary>
+    /// 探测服务是否在线（收到任意 HTTP 响应即视为在线）。本地服务不走系统代理。
+    /// </summary>
     public async Task<bool> IsOnlineAsync(CancellationToken ct = default)
+        => await ProbeAsync(_baseUri, ct);
+
+    /// <summary>
+    /// 扫描常见端口，返回第一个响应 DSH/HTTP 服务的端口；
+    /// 未发现返回 null。用于配置地址端口错误时的纠错提示。
+    /// </summary>
+    public async Task<int?> ScanCommonPortsAsync(CancellationToken ct = default)
+    {
+        foreach (var port in CommonPorts)
+        {
+            if (port == _baseUri.Port)
+            {
+                continue;
+            }
+
+            var builder = new UriBuilder(_baseUri) { Port = port };
+            if (await ProbeAsync(builder.Uri, ct))
+            {
+                return port;
+            }
+        }
+
+        return null;
+    }
+
+    private static async Task<bool> ProbeAsync(Uri uri, CancellationToken ct = default)
     {
         try
         {
@@ -73,7 +104,7 @@ public sealed class DshServiceManager : IDisposable
             {
                 Timeout = ProbeTimeout,
             };
-            using var response = await http.GetAsync(_baseUri, HttpCompletionOption.ResponseHeadersRead, ct);
+            using var response = await http.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, ct);
             return true;
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or OperationCanceledException)

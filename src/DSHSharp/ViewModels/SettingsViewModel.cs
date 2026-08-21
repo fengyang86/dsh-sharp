@@ -8,11 +8,12 @@ public partial class SettingsViewModel : ViewModelBase
 {
     private readonly Action<AppSettings> _save;
 
-    public SettingsViewModel(AppSettings current, Action<AppSettings> save)
+    public SettingsViewModel(AppSettings current, string serviceStatusText, Action<AppSettings> save)
     {
         ArgumentNullException.ThrowIfNull(current);
         _save = save;
 
+        ServiceStatusText = serviceStatusText;
         WebUrl = current.WebUrl;
         ManagedMode = current.ManagedMode;
         SourcePath = current.SourcePath ?? string.Empty;
@@ -22,6 +23,9 @@ public partial class SettingsViewModel : ViewModelBase
         SessionCompleteNotifications = current.SessionCompleteNotifications;
         Theme = current.Theme;
     }
+
+    /// <summary>当前 DSH 服务的实际状态（在线来源/离线），由宿主注入。</summary>
+    public string ServiceStatusText { get; }
 
     public string[] ManagedModes { get; } = ["Npx", "Source", "None"];
 
@@ -55,6 +59,7 @@ public partial class SettingsViewModel : ViewModelBase
     [RelayCommand]
     private void Save()
     {
+        App.Log($"settings window: Save() invoked, theme={Theme}, webUrl={WebUrl}");
         var updated = new AppSettings
         {
             WebUrl = NormalizeUrl(WebUrl),

@@ -37,6 +37,7 @@ public partial class App : Application
     private bool _isExiting;
     private bool _serviceOnline;
     private bool _isStarting;
+    private bool _portScanDone;
     private DateTime _lastAutoStartAttempt = DateTime.MinValue;
 
     /// <summary>当前应用设置。</summary>
@@ -184,10 +185,41 @@ public partial class App : Application
                 return;
             }
 
-            _settingsWindow = new SettingsWindow(new SettingsViewModel(Settings, SaveSettings));
+            _settingsWindow = new SettingsWindow(new SettingsViewModel(Settings, BuildServiceStatusText(), SaveSettings));
             _settingsWindow.Closed += (_, _) => _settingsWindow = null;
             _settingsWindow.Show();
         });
+    }
+
+    /// <summary>
+    /// 切换服务地址并即时重建连接（无需重启）：更新设置、重建事件监控与服务托管、
+    /// 重载 WebView。
+    /// </summary>
+    public void SwitchWebUrl(string url)
+    {
+        Log($"switching web url: {Settings.WebUrl} -> {url}");
+        Settings.WebUrl = url;
+        _settingsService.Save(Settings);
+
+        _monitor?.Dispose();
+        _monitor = null;
+        _serviceManager?.Dispose();
+        _serviceManager = null;
+        _portScanDone = false;
+
+        SetupServiceManager();
+        SetupDshMonitor();
+        _mainWindow?.ReloadWeb(url);
+        UpdateServiceUi();
+    }
+
+    /// <summary>设置页显示的当前服务状态文本。</summary>
+    private string BuildServiceStatusText()
+    {
+        var owned = _serviceManager?.IsOwned ?? false;
+        return _serviceOnline
+            ? owned ? "● 服务在线（客户端托管中）" : "● 服务在线（外部运行，无需托管）"
+            : "○ 服务离线（将按下方托管模式自动启动）";
     }
 
     /// <summary>保存设置：即时应用可生效项，持久化，提示重启生效项。</summary>
@@ -412,6 +444,13 @@ public partial class App : Application
                     _lastAutoStartAttempt = DateTime.UtcNow;
                     _ = StartManagedServiceAsync();
                 }
+
+                // 端口纠错：离线且未扫描过时，扫一遍常见端口，发现服务则提示切换。
+                if (!e.IsOnline && !_portScanDone)
+                {
+                    _portScanDone = true;
+                    _ = ScanAndHintAsync();
+                }
             }
             catch (Exception ex)
             {
@@ -430,6 +469,9 @@ public partial class App : Application
 
         var owned = _serviceManager?.IsOwned ?? false;
         vm.SetServiceState(_serviceOnline, owned, _isStarting);
+
+        // 离线时隐藏 WebView（原生表面会遮挡引导页），在线时恢复。
+        _mainWindow.SetWebViewVisible(_serviceOnline);
 
         if (!_serviceOnline)
         {
@@ -459,6 +501,38 @@ public partial class App : Application
         };
     }
 
+    /// <summary>扫描常见端口，发现 DSH 服务时在引导页提示切换。</summary>
+    private async Task ScanAndHintAsync()
+    {
+        var manager = _serviceManager;
+        if (manager is null || _serviceOnline)
+        {
+            return;
+        }
+
+        Log("port scan started");
+        int? found;
+        try
+        {
+            found = await manager.ScanCommonPortsAsync();
+        }
+        catch (Exception ex)
+        {
+            Log($"port scan failed: {ex.Message}");
+            return;
+        }
+
+        Log($"port scan result: {found?.ToString() ?? "none"}");
+        if (found is not null && _mainWindow is not null && !_serviceOnline)
+        {
+            var port = found.Value;
+            Dispatcher.UIThread.Post(() =>
+            {
+                _mainWindow?.ShowPortHint(port, p => SwitchWebUrl($"http://127.0.0.1:{p}"));
+            });
+        }
+    }
+
     private static string ShortId(string sessionId) =>
         sessionId.Length <= 8 ? sessionId : sessionId[..8];
 
@@ -470,11 +544,13 @@ public partial class App : Application
             return;
         }
 
-        current.RequestedThemeVariant = theme switch
+        var variant = theme switch
         {
             "Light" => ThemeVariant.Light,
             "Dark" => ThemeVariant.Dark,
             _ => ThemeVariant.Default,
         };
+        current.RequestedThemeVariant = variant;
+        Log($"theme applied: {theme} -> {variant}");
     }
 }
