@@ -16,6 +16,9 @@ namespace DSHSharp;
 
 public partial class App : Application
 {
+    private static readonly string LogPath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DSHSharp", "app.log");
+
     /// <summary>当前 App 实例（供入口/托盘/单实例回调访问）。</summary>
     public static App? Instance { get; private set; }
 
@@ -100,13 +103,12 @@ public partial class App : Application
 
     private void OnExit(object? sender, ControlledApplicationLifetimeExitEventArgs e)
     {
-        if (_monitor is not null)
-        {
-            _monitor.DisposeAsync().AsTask().GetAwaiter().GetResult();
-        }
-
+        Log("app OnExit triggered");
+        // 只取消不等待：UI 线程同步等待后台任务会与窗口/WebView2 销毁形成死锁。
+        _monitor?.Dispose();
         _trayIcon?.Dispose();
         _trayIcon = null;
+        Log("app OnExit finished");
     }
 
     private void SetupTrayIcon()
@@ -116,11 +118,11 @@ public partial class App : Application
 
         var menu = new NativeMenu();
         var showItem = new NativeMenuItem("显示主窗口");
-        showItem.Click += (_, _) => ActivateMainWindow();
+        showItem.Click += (_, _) => SafePost("tray:show", ActivateMainWindow);
         menu.Items.Add(showItem);
         menu.Items.Add(new NativeMenuItemSeparator());
         var exitItem = new NativeMenuItem("退出");
-        exitItem.Click += (_, _) => RequestShutdown();
+        exitItem.Click += (_, _) => SafePost("tray:exit", RequestShutdown);
         menu.Items.Add(exitItem);
 
         _trayIcon = new TrayIcon
@@ -130,21 +132,71 @@ public partial class App : Application
             Menu = menu,
             IsVisible = true,
         };
-        _trayIcon.Clicked += (_, _) => ActivateMainWindow();
+        _trayIcon.Clicked += (_, _) => SafePost("tray:clicked", ActivateMainWindow);
+    }
+
+    /// <summary>在 UI 线程安全执行托盘回调（托盘事件可能在非 UI 线程触发），并记录异常。</summary>
+    private static void SafePost(string action, Action handler)
+    {
+        try
+        {
+            Dispatcher.UIThread.Post(() =>
+            {
+                try
+                {
+                    handler();
+                }
+                catch (Exception ex)
+                {
+                    Log($"{action} handler failed: {ex}");
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            Log($"{action} post failed: {ex}");
+        }
+    }
+
+    /// <summary>追加一行应用日志（%APPDATA%/DSHSharp/app.log），用于排查桌面壳问题。</summary>
+    public static void Log(string message)
+    {
+        try
+        {
+            var directory = Path.GetDirectoryName(LogPath);
+            if (!string.IsNullOrEmpty(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            File.AppendAllText(LogPath, $"[{DateTime.Now:HH:mm:ss.fff}] {message}{Environment.NewLine}");
+        }
+        catch
+        {
+            // 日志失败不影响应用。
+        }
     }
 
     /// <summary>真正退出应用（托盘菜单"退出"）。</summary>
     private void RequestShutdown()
     {
+        Log("tray:exit handler invoked");
         _isExiting = true;
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
+            Log("tray:exit -> calling desktop.Shutdown()");
             desktop.Shutdown();
+            Log("tray:exit -> desktop.Shutdown() returned");
+        }
+        else
+        {
+            Log("tray:exit -> ApplicationLifetime is NOT IClassicDesktopStyleApplicationLifetime");
         }
     }
 
     private void SetupDshMonitor()
     {
+        DshEventMonitor.Log = Log;
         _monitor = new DshEventMonitor(Settings.WebUrl);
         _monitor.SessionCompleted += OnSessionCompleted;
         _monitor.ServiceAvailabilityChanged += OnServiceAvailabilityChanged;
@@ -180,11 +232,19 @@ public partial class App : Application
 
     private void OnServiceAvailabilityChanged(object? sender, ServiceAvailabilityEventArgs e)
     {
+        Log($"service availability changed: online={e.IsOnline}");
         Dispatcher.UIThread.Post(() =>
         {
-            if (_mainWindow is { DataContext: MainWindowViewModel vm })
+            try
             {
-                vm.SetServiceOnline(e.IsOnline);
+                if (_mainWindow is { DataContext: MainWindowViewModel vm })
+                {
+                    vm.SetServiceOnline(e.IsOnline);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"service status update failed: {ex}");
             }
         });
     }

@@ -28,7 +28,20 @@ public partial class MainWindow : Window
         DataContext = new MainWindowViewModel(settings);
         Web.Source = new Uri(_settings.WebUrl);
 
+        WindowStateProperty.Changed.AddClassHandler<Window>(OnWindowStateChanged);
         Closing += OnClosing;
+    }
+
+    private void OnWindowStateChanged(Window window, AvaloniaPropertyChangedEventArgs e) =>
+        UpdateMaximizeButton();
+
+    /// <summary>最大化按钮图标随窗口状态切换：正常 ↔ 最大化。</summary>
+    private void UpdateMaximizeButton()
+    {
+        var isMaximized = WindowState == WindowState.Maximized;
+        MaximizeIcon.IsVisible = !isMaximized;
+        RestoreIcon.IsVisible = isMaximized;
+        ToolTip.SetTip(MaximizeButton, isMaximized ? "还原" : "最大化");
     }
 
     /// <summary>显示"会话完成"等通知横幅，5 秒后自动淡出。</summary>
@@ -77,7 +90,9 @@ public partial class MainWindow : Window
 
     private void OnClosing(object? sender, WindowClosingEventArgs e)
     {
-        if (_settings.CloseToTray && App.Instance is { IsExiting: false })
+        var isExiting = App.Instance is { IsExiting: true };
+        App.Log($"window closing: closeToTray={_settings.CloseToTray}, isExiting={isExiting}");
+        if (_settings.CloseToTray && !isExiting)
         {
             e.Cancel = true;
             Hide();
@@ -85,14 +100,6 @@ public partial class MainWindow : Window
     }
 
     // ---- 自定义标题栏 ----
-
-    private void TitleBar_OnPointerPressed(object? sender, PointerPressedEventArgs e)
-    {
-        if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
-        {
-            BeginMoveDrag(e);
-        }
-    }
 
     private void TitleBar_OnDoubleTapped(object? sender, TappedEventArgs e)
     {

@@ -13,7 +13,7 @@
         MinWidth="720" MinHeight="480"
         WindowStartupLocation="CenterScreen"
         ExtendClientAreaToDecorationsHint="True"
-        WindowDecorations="None">
+        WindowDecorations="BorderOnly">
 
     <Window.Styles>
         <!-- 自定义标题栏窗口按钮 -->
@@ -47,7 +47,6 @@
         <Border Grid.Row="0"
                 chrome:WindowDecorationProperties.ElementRole="TitleBar"
                 Background="{DynamicResource SystemControlBackgroundChromeMediumBrush}"
-                PointerPressed="TitleBar_OnPointerPressed"
                 DoubleTapped="TitleBar_OnDoubleTapped">
             <Grid ColumnDefinitions="Auto,*,Auto">
                 <StackPanel Grid.Column="0" Margin="12,0" Orientation="Horizontal" Spacing="8"
@@ -60,18 +59,31 @@
                 </StackPanel>
 
                 <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="0">
-                    <Button Classes="window-btn" Click="MinimizeButton_OnClick"
+                    <Button Classes="window-btn"
+                            chrome:WindowDecorationProperties.ElementRole="User"
+                            Click="MinimizeButton_OnClick"
                             ToolTip.Tip="最小化">
                         <Path Data="M 0,0 L 10,0" Stroke="{DynamicResource SystemControlForegroundBaseHighBrush}"
                               StrokeThickness="1.2" VerticalAlignment="Center"/>
                     </Button>
-                    <Button Classes="window-btn" Click="MaximizeButton_OnClick"
-                            ToolTip.Tip="最大化/还原">
-                        <Path Data="M 0.5,0.5 L 9.5,0.5 L 9.5,9.5 L 0.5,9.5 Z"
-                              Stroke="{DynamicResource SystemControlForegroundBaseHighBrush}"
-                              StrokeThickness="1.2" VerticalAlignment="Center"/>
+                    <Button x:Name="MaximizeButton" Classes="window-btn"
+                            chrome:WindowDecorationProperties.ElementRole="User"
+                            Click="MaximizeButton_OnClick"
+                            ToolTip.Tip="最大化">
+                        <Grid Width="10" Height="10">
+                            <Path x:Name="MaximizeIcon" Data="M 0.5,0.5 L 9.5,0.5 L 9.5,9.5 L 0.5,9.5 Z"
+                                  Stroke="{DynamicResource SystemControlForegroundBaseHighBrush}"
+                                  StrokeThickness="1.2" VerticalAlignment="Center"/>
+                            <!-- 还原图标：前后两个重叠方框 -->
+                            <Path x:Name="RestoreIcon" IsVisible="False"
+                                  Data="M 3,1 L 9,1 L 9,7 L 3,7 Z M 1,3 L 7,3 L 7,9 L 1,9 Z"
+                                  Stroke="{DynamicResource SystemControlForegroundBaseHighBrush}"
+                                  StrokeThickness="1.2" VerticalAlignment="Center"/>
+                        </Grid>
                     </Button>
-                    <Button Classes="window-btn close" Click="CloseButton_OnClick"
+                    <Button Classes="window-btn close"
+                            chrome:WindowDecorationProperties.ElementRole="User"
+                            Click="CloseButton_OnClick"
                             ToolTip.Tip="关闭">
                         <Path Data="M 0,0 L 10,10 M 10,0 L 0,10"
                               Stroke="{DynamicResource SystemControlForegroundBaseHighBrush}"
