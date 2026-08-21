@@ -1,6 +1,22 @@
 namespace DSHSharp.Core.Configuration;
 
 /// <summary>
+/// 一个服务连接配置（对应一个 DSH 实例）：
+/// 地址 + 托管模式 + 源码路径。支持多配置并存、切换激活。
+/// </summary>
+public sealed class ServiceProfile
+{
+    public string Name { get; set; } = "默认配置";
+
+    public string WebUrl { get; set; } = AppSettings.DefaultWebUrl;
+
+    /// <summary>Npx / Source / None。</summary>
+    public string ManagedMode { get; set; } = "Npx";
+
+    public string? SourcePath { get; set; }
+}
+
+/// <summary>
 /// DSH-Sharp 应用设置。字段与 settings.json 一一对应，
 /// 由 <c>AppSettingsService</c> 负责持久化。
 /// </summary>
@@ -50,4 +66,10 @@ public sealed class AppSettings
 
     /// <summary>上次窗口是否最大化。</summary>
     public bool WindowMaximized { get; set; }
+
+    /// <summary>全部服务连接配置（多配置并存）。</summary>
+    public List<ServiceProfile> Profiles { get; set; } = [];
+
+    /// <summary>当前激活的配置名（对应 Profiles 中的 Name）。</summary>
+    public string ActiveProfileName { get; set; } = "默认配置";
 }

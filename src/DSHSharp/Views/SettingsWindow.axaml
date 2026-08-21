@@ -3,12 +3,12 @@
         xmlns:vm="using:DSHSharp.ViewModels"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        mc:Ignorable="d" d:DesignWidth="520" d:DesignHeight="560"
+        mc:Ignorable="d" d:DesignWidth="760" d:DesignHeight="580"
         x:Class="DSHSharp.Views.SettingsWindow"
         x:DataType="vm:SettingsViewModel"
         Title="DSH-Sharp 设置"
-        Width="520" Height="560"
-        MinWidth="440" MinHeight="420"
+        Width="760" Height="580"
+        MinWidth="640" MinHeight="480"
         WindowStartupLocation="CenterOwner"
         Icon="/Assets/avalonia-logo.ico">
 
@@ -16,20 +16,42 @@
         <vm:SettingsViewModel/>
     </Design.DataContext>
 
-    <Grid Margin="20,16" RowDefinitions="Auto,*,Auto">
+    <DockPanel Margin="0">
 
-        <TextBlock Grid.Row="0" Text="设置" FontSize="20" FontWeight="SemiBold" Margin="0,0,0,12"/>
+        <!-- ===== 底部操作栏 ===== -->
+        <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8"
+                    Margin="16,12,16,14">
+            <Button Content="恢复默认" Padding="14,6" Command="{Binding RestoreDefaultsCommand}"/>
+            <Button Content="保存" Padding="20,6" Command="{Binding SaveCommand}"/>
+            <Button Content="取消" Padding="20,6" Command="{Binding CancelCommand}"/>
+        </StackPanel>
 
-        <ScrollViewer Grid.Row="1">
-            <StackPanel Spacing="18">
+        <!-- ===== 左侧导航 ===== -->
+        <Border DockPanel.Dock="Left" Width="170"
+                Background="{DynamicResource SystemControlBackgroundChromeMediumLowBrush}"
+                BorderThickness="0,0,1,0"
+                BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}">
+            <ListBox ItemsSource="{Binding Sections}" SelectedItem="{Binding SelectedSection}"
+                     Margin="8" Background="Transparent">
+                <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <TextBlock Text="{Binding}" Padding="10,8" FontSize="13"/>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+        </Border>
 
-                <!-- ===== 服务 ===== -->
-                <StackPanel Spacing="8">
-                    <TextBlock Text="服务" FontSize="14" FontWeight="SemiBold"
-                               Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
-                    <Border Padding="10,8" CornerRadius="6" BorderThickness="1"
+        <!-- ===== 内容区 ===== -->
+        <ScrollViewer>
+            <StackPanel Margin="20,16,20,16" Spacing="16">
+
+                <!-- ===== 面板：服务配置 ===== -->
+                <StackPanel IsVisible="{Binding ShowProfiles}" Spacing="14">
+
+                    <Border Padding="12,10" CornerRadius="6" BorderThickness="1"
                             BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}">
                         <StackPanel Spacing="8">
+                            <TextBlock Text="当前服务状态" FontSize="13" FontWeight="SemiBold"/>
                             <TextBlock Text="{Binding ServiceStatusText}" FontSize="12"
                                        TextWrapping="Wrap" LineHeight="18"/>
                             <StackPanel Orientation="Horizontal" Spacing="8">
@@ -40,71 +62,107 @@
                             </StackPanel>
                         </StackPanel>
                     </Border>
-                    <Border Padding="10,8" CornerRadius="6" BorderThickness="1"
-                            BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}">
-                        <StackPanel Spacing="8">
-                            <TextBlock Text="版本更新" FontSize="13" FontWeight="SemiBold"/>
-                            <TextBlock Text="{Binding VersionInfoText}" FontSize="12"
-                                       TextWrapping="Wrap" LineHeight="18"/>
-                            <StackPanel Orientation="Horizontal" Spacing="8">
-                                <Button Content="检查更新" Padding="12,4" FontSize="12"
-                                        Command="{Binding CheckUpdateCommand}"/>
-                                <Button Content="更新服务" Padding="12,4" FontSize="12"
-                                        Command="{Binding UpdateServiceCommand}"/>
-                            </StackPanel>
+
+                    <Grid ColumnDefinitions="240,*" ColumnSpacing="14">
+
+                        <!-- 配置列表 -->
+                        <StackPanel Grid.Column="0" Spacing="8">
+                            <TextBlock Text="服务配置" FontSize="13" FontWeight="SemiBold"/>
+                            <ListBox ItemsSource="{Binding Profiles}" SelectedItem="{Binding SelectedProfile}"
+                                     MinHeight="160" MaxHeight="220">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Spacing="2" Margin="4,2">
+                                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                                <TextBlock Text="●" FontSize="10" VerticalAlignment="Center"
+                                                           IsVisible="{Binding IsActive}"/>
+                                                <TextBlock Text="{Binding Name}" FontSize="13"
+                                                           FontWeight="SemiBold"/>
+                                            </StackPanel>
+                                            <TextBlock Text="{Binding Summary}" FontSize="11"
+                                                       Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                            <WrapPanel>
+                                <Button Content="新增" Padding="10,4" FontSize="12" Margin="0,0,6,6"
+                                        Command="{Binding AddProfileCommand}"/>
+                                <Button Content="复制" Padding="10,4" FontSize="12" Margin="0,0,6,6"
+                                        Command="{Binding DuplicateProfileCommand}"/>
+                                <Button Content="删除" Padding="10,4" FontSize="12" Margin="0,0,6,6"
+                                        Command="{Binding DeleteProfileCommand}"/>
+                                <Button Content="设为当前" Padding="10,4" FontSize="12" Margin="0,0,6,6"
+                                        Command="{Binding SetActiveCommand}"/>
+                            </WrapPanel>
                         </StackPanel>
-                    </Border>
-                    <StackPanel Spacing="6">
-                        <TextBlock Text="服务地址"/>
-                        <TextBox Text="{Binding WebUrl}" PlaceholderText="http://127.0.0.1:3080"/>
-                    </StackPanel>
-                    <StackPanel Spacing="6">
-                        <TextBlock Text="托管模式（仅服务离线时生效）"/>
-                        <ComboBox ItemsSource="{Binding ManagedModes}" SelectedItem="{Binding ManagedMode}"
-                                  HorizontalAlignment="Stretch"/>
-                        <TextBlock Text="Npx：离线时用 npx 启动官方包；Source：在源码路径下用 pnpm 启动；None：仅探测不托管。服务在线时无论哪种模式都直接使用现有服务。"
-                                   FontSize="11" TextWrapping="Wrap"
-                                   Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
-                    </StackPanel>
-                    <StackPanel Spacing="6">
-                        <TextBlock Text="源码路径（Source 模式）"/>
-                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
-                            <TextBox Grid.Column="0" Text="{Binding SourcePath}"
-                                     PlaceholderText="例如 D:\deepseek-harness"/>
-                            <Button Grid.Column="1" Content="浏览…" Click="BrowseSourcePath_OnClick"/>
-                        </Grid>
-                    </StackPanel>
+
+                        <!-- 配置详情 -->
+                        <StackPanel Grid.Column="1" Spacing="8"
+                                    x:DataType="vm:ServiceProfileItem"
+                                    DataContext="{Binding SelectedProfile}">
+                            <TextBlock Text="配置详情" FontSize="13" FontWeight="SemiBold"/>
+                            <StackPanel Spacing="5">
+                                <TextBlock Text="名称" FontSize="12"/>
+                                <TextBox Text="{Binding Name}" PlaceholderText="配置名称"/>
+                            </StackPanel>
+                            <StackPanel Spacing="5">
+                                <TextBlock Text="服务地址" FontSize="12"/>
+                                <TextBox Text="{Binding WebUrl}" PlaceholderText="http://127.0.0.1:3080"/>
+                            </StackPanel>
+                            <StackPanel Spacing="5">
+                                <TextBlock Text="托管模式（仅服务离线时生效）" FontSize="12"/>
+                                <ComboBox ItemsSource="{Binding ManagedModes}" SelectedItem="{Binding ManagedMode}"
+                                          HorizontalAlignment="Stretch"/>
+                            </StackPanel>
+                            <StackPanel Spacing="5">
+                                <TextBlock Text="源码路径（Source 模式）" FontSize="12"/>
+                                <TextBox Text="{Binding SourcePath}" PlaceholderText="例如 D:\deepseek-harness"/>
+                            </StackPanel>
+                            <TextBlock Text="服务在线时无论哪种模式都直接使用现有服务；切换配置即时生效，无需重启。"
+                                       FontSize="11" TextWrapping="Wrap"
+                                       Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+                        </StackPanel>
+
+                    </Grid>
                 </StackPanel>
 
-                <!-- ===== 通用 ===== -->
-                <StackPanel Spacing="8">
-                    <TextBlock Text="通用" FontSize="14" FontWeight="SemiBold"
-                               Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+                <!-- ===== 面板：通用 ===== -->
+                <StackPanel IsVisible="{Binding ShowGeneral}" Spacing="10">
+                    <TextBlock Text="通用" FontSize="16" FontWeight="SemiBold"/>
                     <ToggleSwitch Content="登录时自启动" IsChecked="{Binding AutoStartEnabled}"/>
                     <ToggleSwitch Content="关闭窗口时最小化到托盘" IsChecked="{Binding CloseToTray}"/>
                     <ToggleSwitch Content="启动时最小化到托盘" IsChecked="{Binding StartMinimized}"/>
                     <ToggleSwitch Content="会话完成时弹出通知" IsChecked="{Binding SessionCompleteNotifications}"/>
                     <ToggleSwitch Content="通知附带提示音" IsChecked="{Binding NotificationSoundEnabled}"/>
-                    <StackPanel Spacing="6" Margin="0,8,0,0">
-                        <TextBlock Text="主题"/>
+                    <StackPanel Spacing="6" Margin="0,8,0,0" MaxWidth="260">
+                        <TextBlock Text="主题" FontSize="12"/>
                         <ComboBox ItemsSource="{Binding Themes}" SelectedItem="{Binding Theme}"
                                   HorizontalAlignment="Stretch"/>
                     </StackPanel>
                 </StackPanel>
 
-                <TextBlock Text="服务地址/托管模式修改后，将在下次启动时生效。"
-                           FontSize="11" TextWrapping="Wrap"
-                           Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+                <!-- ===== 面板：版本更新 ===== -->
+                <StackPanel IsVisible="{Binding ShowVersion}" Spacing="10">
+                    <TextBlock Text="版本更新" FontSize="16" FontWeight="SemiBold"/>
+                    <TextBlock Text="npx 模式对比 npm 最新发布版；源码模式对比仓库最新提交。"
+                               FontSize="12" TextWrapping="Wrap"
+                               Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+                    <TextBlock Text="{Binding VersionInfoText}" FontSize="12" TextWrapping="Wrap" LineHeight="18"/>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button Content="检查更新" Padding="14,5" Command="{Binding CheckUpdateCommand}"/>
+                        <Button Content="更新服务" Padding="14,5" Command="{Binding UpdateServiceCommand}"/>
+                    </StackPanel>
+                </StackPanel>
+
+                <!-- ===== 面板：关于 ===== -->
+                <StackPanel IsVisible="{Binding ShowAbout}" Spacing="10">
+                    <TextBlock Text="关于" FontSize="16" FontWeight="SemiBold"/>
+                    <TextBlock Text="{Binding AboutText}" FontSize="13" LineHeight="22" TextWrapping="Wrap"/>
+                </StackPanel>
 
             </StackPanel>
         </ScrollViewer>
 
-        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8"
-                    Margin="0,14,0,0">
-            <Button Content="恢复默认" Padding="14,6" Command="{Binding RestoreDefaultsCommand}"/>
-            <Button Content="保存" Padding="20,6" Command="{Binding SaveCommand}"/>
-            <Button Content="取消" Padding="20,6" Command="{Binding CancelCommand}"/>
-        </StackPanel>
-
-    </Grid>
+    </DockPanel>
 </Window>

@@ -1,60 +1,302 @@
+using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using DSHSharp.Core.Configuration;
 
 namespace DSHSharp.ViewModels;
 
+/// <summary>服务配置列表项（包装 ServiceProfile，供列表展示与编辑）。</summary>
+public partial class ServiceProfileItem : ViewModelBase
+{
+    private readonly ServiceProfile _profile;
+
+    public ServiceProfileItem(ServiceProfile profile, bool isActive)
+    {
+        _profile = profile;
+        IsActive = isActive;
+    }
+
+    public ServiceProfile Profile => _profile;
+
+    [ObservableProperty]
+    private bool _isActive;
+
+    public string Name
+    {
+        get => _profile.Name;
+        set
+        {
+            if (_profile.Name != value)
+            {
+                _profile.Name = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(Summary));
+            }
+        }
+    }
+
+    public string WebUrl
+    {
+        get => _profile.WebUrl;
+        set
+        {
+            if (_profile.WebUrl != value)
+            {
+                _profile.WebUrl = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(Summary));
+            }
+        }
+    }
+
+    public string ManagedMode
+    {
+        get => _profile.ManagedMode;
+        set
+        {
+            if (_profile.ManagedMode != value)
+            {
+                _profile.ManagedMode = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(Summary));
+            }
+        }
+    }
+
+    public string? SourcePath
+    {
+        get => _profile.SourcePath;
+        set
+        {
+            if (_profile.SourcePath != value)
+            {
+                _profile.SourcePath = value;
+                OnPropertyChanged();
+            }
+        }
+    }
+
+    public string[] ManagedModes { get; } = ["Npx", "Source", "None"];
+
+    /// <summary>列表摘要：模式 + 地址。</summary>
+    public string Summary
+    {
+        get
+        {
+            var modeText = ManagedMode switch
+            {
+                "None" => "不托管",
+                "Source" => "源码",
+                _ => "npx",
+            };
+            return $"{modeText} · {WebUrl}";
+        }
+    }
+}
+
 public partial class SettingsViewModel : ViewModelBase
 {
+    private readonly AppSettings _settings;
     private readonly Action<AppSettings> _save;
     private readonly Action _startService;
     private readonly Action _stopService;
+    private readonly Action<string> _switchProfile;
     private readonly Func<Task<string>> _checkVersion;
     private readonly Action _updateService;
 
     public SettingsViewModel(
-        AppSettings current,
+        AppSettings settings,
         string serviceStatusText,
         Action<AppSettings> save,
         Action startService,
         Action stopService,
+        Action<string> switchProfile,
         Func<Task<string>>? checkVersion = null,
         Action? updateService = null)
     {
-        ArgumentNullException.ThrowIfNull(current);
+        ArgumentNullException.ThrowIfNull(settings);
+        _settings = settings;
         _save = save;
         _startService = startService;
         _stopService = stopService;
+        _switchProfile = switchProfile;
         _checkVersion = checkVersion ?? (() => Task.FromResult("版本检查不可用"));
         _updateService = updateService ?? (() => { });
 
         ServiceStatusText = serviceStatusText;
-        WebUrl = current.WebUrl;
-        ManagedMode = current.ManagedMode;
-        SourcePath = current.SourcePath ?? string.Empty;
-        AutoStartEnabled = current.AutoStartEnabled;
-        CloseToTray = current.CloseToTray;
-        StartMinimized = current.StartMinimized;
-        SessionCompleteNotifications = current.SessionCompleteNotifications;
-        NotificationSoundEnabled = current.NotificationSoundEnabled;
-        Theme = current.Theme;
+        AutoStartEnabled = settings.AutoStartEnabled;
+        CloseToTray = settings.CloseToTray;
+        StartMinimized = settings.StartMinimized;
+        SessionCompleteNotifications = settings.SessionCompleteNotifications;
+        NotificationSoundEnabled = settings.NotificationSoundEnabled;
+        Theme = settings.Theme;
+
+        ProfileHelper.EnsureDefaultProfile(settings);
+        foreach (var profile in settings.Profiles)
+        {
+            Profiles.Add(new ServiceProfileItem(profile, profile.Name == settings.ActiveProfileName));
+        }
+
+        if (Profiles.Count > 0)
+        {
+            SelectedProfile = Profiles[0];
+        }
     }
 
-    /// <summary>当前 DSH 服务的实际状态（在线来源/离线），由宿主注入。</summary>
+    // ---- 导航 ----
+
+    public string[] Sections { get; } = ["服务配置", "通用", "版本更新", "关于"];
+
+    [ObservableProperty]
+    private string _selectedSection = "服务配置";
+
+    partial void OnSelectedSectionChanged(string value)
+    {
+        ShowProfiles = value == "服务配置";
+        ShowGeneral = value == "通用";
+        ShowVersion = value == "版本更新";
+        ShowAbout = value == "关于";
+    }
+
+    [ObservableProperty]
+    private bool _showProfiles = true;
+
+    [ObservableProperty]
+    private bool _showGeneral;
+
+    [ObservableProperty]
+    private bool _showVersion;
+
+    [ObservableProperty]
+    private bool _showAbout;
+
+    // ---- 服务状态卡片 ----
+
     public string ServiceStatusText { get; }
 
-    public string[] ManagedModes { get; } = ["Npx", "Source", "None"];
+    // ---- 服务配置 ----
 
-    public string[] Themes { get; } = ["System", "Light", "Dark"];
-
-    [ObservableProperty]
-    private string _webUrl;
+    public ObservableCollection<ServiceProfileItem> Profiles { get; } = [];
 
     [ObservableProperty]
-    private string _managedMode;
+    private ServiceProfileItem? _selectedProfile;
 
-    [ObservableProperty]
-    private string _sourcePath;
+    [RelayCommand]
+    private void AddProfile()
+    {
+        var index = Profiles.Count + 1;
+        var profile = new ServiceProfile
+        {
+            Name = $"新配置 {index}",
+            WebUrl = _settings.WebUrl,
+            ManagedMode = _settings.ManagedMode,
+            SourcePath = _settings.SourcePath,
+        };
+        var item = new ServiceProfileItem(profile, isActive: false);
+        Profiles.Add(item);
+        SelectedProfile = item;
+    }
+
+    [RelayCommand]
+    private void DuplicateProfile()
+    {
+        if (SelectedProfile is null)
+        {
+            return;
+        }
+
+        var source = SelectedProfile.Profile;
+        var copy = new ServiceProfile
+        {
+            Name = source.Name + "（副本）",
+            WebUrl = source.WebUrl,
+            ManagedMode = source.ManagedMode,
+            SourcePath = source.SourcePath,
+        };
+        var item = new ServiceProfileItem(copy, isActive: false);
+        Profiles.Add(item);
+        SelectedProfile = item;
+    }
+
+    [RelayCommand]
+    private void DeleteProfile()
+    {
+        if (SelectedProfile is null || Profiles.Count <= 1)
+        {
+            return;
+        }
+
+        var index = Profiles.IndexOf(SelectedProfile);
+        Profiles.Remove(SelectedProfile);
+        SelectedProfile = Profiles[Math.Min(index, Profiles.Count - 1)];
+    }
+
+    /// <summary>保存全部配置与通用设置，并重建连接（激活配置内容变化即时生效）。</summary>
+    [RelayCommand]
+    private void Save()
+    {
+        _settings.Profiles = Profiles.Select(p => p.Profile).ToList();
+        _settings.AutoStartEnabled = AutoStartEnabled;
+        _settings.CloseToTray = CloseToTray;
+        _settings.StartMinimized = StartMinimized;
+        _settings.SessionCompleteNotifications = SessionCompleteNotifications;
+        _settings.NotificationSoundEnabled = NotificationSoundEnabled;
+        _settings.Theme = Theme;
+
+        ProfileHelper.ApplyActiveProfile(_settings);
+        _save(_settings);
+        // 重建连接：激活配置的地址/模式/路径若被修改，立即生效（无需重启）。
+        _switchProfile(_settings.ActiveProfileName);
+
+        CloseRequested?.Invoke();
+    }
+
+    /// <summary>把选中的配置设为激活并立即切换（无需整体保存）。</summary>
+    [RelayCommand]
+    private void SetActive()
+    {
+        if (SelectedProfile is null || Profiles.Count == 0)
+        {
+            return;
+        }
+
+        _settings.Profiles = Profiles.Select(p => p.Profile).ToList();
+        _settings.ActiveProfileName = SelectedProfile.Name;
+        foreach (var item in Profiles)
+        {
+            item.IsActive = item == SelectedProfile;
+        }
+
+        _save(_settings);
+        _switchProfile(SelectedProfile.Name);
+    }
+
+    /// <summary>不保存，直接关闭窗口。</summary>
+    [RelayCommand]
+    private void Cancel() => CloseRequested?.Invoke();
+
+    /// <summary>重置为默认值：通用开关/主题 + 重建单个"默认配置"（需再点"保存"生效）。</summary>
+    [RelayCommand]
+    private void RestoreDefaults()
+    {
+        var defaults = new AppSettings();
+        AutoStartEnabled = defaults.AutoStartEnabled;
+        CloseToTray = defaults.CloseToTray;
+        StartMinimized = defaults.StartMinimized;
+        SessionCompleteNotifications = defaults.SessionCompleteNotifications;
+        NotificationSoundEnabled = defaults.NotificationSoundEnabled;
+        Theme = defaults.Theme;
+
+        Profiles.Clear();
+        var profile = new ServiceProfile { Name = "默认配置" };
+        Profiles.Add(new ServiceProfileItem(profile, isActive: true));
+        SelectedProfile = Profiles[0];
+    }
+
+    /// <summary>关闭窗口请求（由窗口订阅）。</summary>
+    public event Action? CloseRequested;
+
+    // ---- 通用 ----
 
     [ObservableProperty]
     private bool _autoStartEnabled;
@@ -74,58 +316,11 @@ public partial class SettingsViewModel : ViewModelBase
     [ObservableProperty]
     private string _theme;
 
-    /// <summary>保存设置并关闭窗口。</summary>
-    [RelayCommand]
-    private void Save()
-    {
-        App.Log($"settings window: Save() invoked, theme={Theme}, webUrl={WebUrl}");
-        var updated = new AppSettings
-        {
-            WebUrl = NormalizeUrl(WebUrl),
-            ManagedMode = ManagedMode,
-            SourcePath = string.IsNullOrWhiteSpace(SourcePath) ? null : SourcePath.Trim(),
-            AutoStartEnabled = AutoStartEnabled,
-            CloseToTray = CloseToTray,
-            StartMinimized = StartMinimized,
-            SessionCompleteNotifications = SessionCompleteNotifications,
-            NotificationSoundEnabled = NotificationSoundEnabled,
-            Theme = Theme,
-        };
-        _save(updated);
-        CloseRequested?.Invoke();
-    }
+    public string[] Themes { get; } = ["System", "Light", "Dark"];
 
-    /// <summary>不保存，直接关闭窗口。</summary>
-    [RelayCommand]
-    private void Cancel() => CloseRequested?.Invoke();
+    // ---- 版本更新 ----
 
-    /// <summary>把字段重置为默认值（需再点"保存"生效）。</summary>
-    [RelayCommand]
-    private void RestoreDefaults()
-    {
-        var defaults = new AppSettings();
-        WebUrl = defaults.WebUrl;
-        ManagedMode = defaults.ManagedMode;
-        SourcePath = defaults.SourcePath ?? string.Empty;
-        AutoStartEnabled = defaults.AutoStartEnabled;
-        CloseToTray = defaults.CloseToTray;
-        StartMinimized = defaults.StartMinimized;
-        SessionCompleteNotifications = defaults.SessionCompleteNotifications;
-        NotificationSoundEnabled = defaults.NotificationSoundEnabled;
-        Theme = defaults.Theme;
-    }
-
-    /// <summary>立即启动/重试托管本地服务（无需保存设置）。</summary>
-    [RelayCommand]
-    private void StartService() => _startService();
-
-    /// <summary>立即停止客户端托管的本地服务。</summary>
-    [RelayCommand]
-    private void StopService() => _stopService();
-
-    /// <summary>检查 DSH 版本更新（运行版 + 模式对应最新版）。</summary>
     [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(CheckUpdateCommand))]
     private bool _isCheckingUpdate;
 
     [ObservableProperty]
@@ -152,27 +347,22 @@ public partial class SettingsViewModel : ViewModelBase
 
     private bool CanCheckUpdate() => !IsCheckingUpdate;
 
-    /// <summary>按托管模式更新服务（npx 重启拉新 / 源码提示 git pull）。</summary>
     [RelayCommand]
     private void UpdateService() => _updateService();
 
-    /// <summary>关闭窗口请求（由窗口订阅）。</summary>
-    public event Action? CloseRequested;
+    // ---- 服务操作（状态卡片） ----
 
-    private static string NormalizeUrl(string url)
-    {
-        var trimmed = url.Trim();
-        if (string.IsNullOrEmpty(trimmed))
-        {
-            return AppSettings.DefaultWebUrl;
-        }
+    [RelayCommand]
+    private void StartService() => _startService();
 
-        if (!trimmed.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
-            !trimmed.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
-        {
-            trimmed = "http://" + trimmed;
-        }
+    [RelayCommand]
+    private void StopService() => _stopService();
 
-        return trimmed;
-    }
+    // ---- 关于 ----
+
+    public string AboutText =>
+        "DSH-Sharp · DeepSeek Harness 桌面客户端\n" +
+        $".NET 10 + Avalonia\n" +
+        $"版本 {System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.1.0"}\n" +
+        "MIT License";
 }

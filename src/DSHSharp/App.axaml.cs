@@ -64,6 +64,10 @@ public partial class App : Application
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             Settings = _settingsService.Load();
+            // 多配置：旧版配置迁移出默认 Profile，并同步顶层字段；迁移结果落盘。
+            ProfileHelper.EnsureDefaultProfile(Settings);
+            ProfileHelper.ApplyActiveProfile(Settings);
+            _settingsService.Save(Settings);
             // 自启动开关以系统实际状态为准（防止设置与注册表脱节）。
             Settings.AutoStartEnabled = _autoStart.IsEnabled();
             ApplyTheme(Settings.Theme);
@@ -224,11 +228,25 @@ public partial class App : Application
                 SaveSettings,
                 () => _ = StartManagedServiceAsync(),
                 StopManagedService,
+                SwitchProfile,
                 CheckDshVersionAsync,
                 UpdateManagedService));
             _settingsWindow.Closed += (_, _) => _settingsWindow = null;
             _settingsWindow.Show();
         });
+    }
+
+    /// <summary>
+    /// 切换服务配置（Profile）：同步激活与顶层字段、持久化并即时重建连接。
+    /// </summary>
+    public void SwitchProfile(string name)
+    {
+        ProfileHelper.ActivateProfile(Settings, name);
+        ProfileHelper.ApplyActiveProfile(Settings);
+        Log($"switched profile: {name} -> {Settings.WebUrl}");
+        _settingsService.Save(Settings);
+        _mainWindow?.ShowNotification("服务配置已切换", $"{Settings.ActiveProfileName} · {Settings.WebUrl}");
+        SwitchWebUrl(Settings.WebUrl);
     }
 
     /// <summary>
@@ -602,7 +620,7 @@ public partial class App : Application
         }
 
         var owned = _serviceManager?.IsOwned ?? false;
-        vm.SetServiceState(_serviceOnline, owned, _isStarting, Settings.WebUrl, Settings.ManagedMode);
+        vm.SetServiceState(_serviceOnline, owned, _isStarting, Settings.WebUrl, Settings.ManagedMode, Settings.ActiveProfileName);
 
         // 离线时隐藏 WebView（原生表面会遮挡引导页），在线时恢复。
         _mainWindow.SetWebViewVisible(_serviceOnline);

@@ -35,9 +35,9 @@ public partial class MainWindowViewModel : ViewModelBase
 
     /// <summary>
     /// 更新服务状态栏，展示当前连接的服务身份：
-    /// 地址、托管模式、在线/离线、是否客户端托管；圆点同步着色。
+    /// 配置名、地址、托管模式、在线/离线、是否客户端托管；圆点同步着色。
     /// </summary>
-    public void SetServiceState(bool online, bool owned, bool starting, string webUrl, string managedMode)
+    public void SetServiceState(bool online, bool owned, bool starting, string webUrl, string managedMode, string profileName)
     {
         var modeText = managedMode switch
         {
@@ -48,11 +48,11 @@ public partial class MainWindowViewModel : ViewModelBase
 
         ServiceStatusBrush = starting ? StatusOrange : online ? StatusGreen : StatusGray;
         ServiceStatusText = starting
-            ? $"正在启动 {webUrl}（{modeText}）…"
+            ? $"正在启动 {profileName} · {webUrl}（{modeText}）…"
             : online
                 ? owned
-                    ? $"{webUrl} · 在线（{modeText}·客户端启动）"
-                    : $"{webUrl} · 在线（外部运行）"
-                : $"{webUrl} · 离线";
+                    ? $"{profileName} · {webUrl} · 在线（{modeText}·客户端启动）"
+                    : $"{profileName} · {webUrl} · 在线（外部运行）"
+                : $"{profileName} · {webUrl} · 离线";
     }
 }
