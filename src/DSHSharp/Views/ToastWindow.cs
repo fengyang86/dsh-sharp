@@ -24,9 +24,9 @@ public sealed class ToastWindow : Window
         ShowInTaskbar = false;
         Topmost = true;
         SizeToContent = SizeToContent.WidthAndHeight;
-        MinWidth = 380;
-        MaxWidth = 560;
-        MaxHeight = 260;
+        MinWidth = 340;
+        MaxWidth = 460;
+        MaxHeight = 200;
 
         var titleText = new TextBlock
         {
@@ -51,10 +51,10 @@ public sealed class ToastWindow : Window
             var previewText = new TextBlock
             {
                 Text = preview,
-                FontSize = 12.5,
+                FontSize = 12,
                 TextWrapping = TextWrapping.Wrap,
-                MaxLines = 4,
-                LineHeight = 18,
+                MaxLines = 2,
+                LineHeight = 17,
                 Foreground = new SolidColorBrush(Color.Parse("#B8C0D4")),
                 TextTrimming = TextTrimming.CharacterEllipsis,
             };
