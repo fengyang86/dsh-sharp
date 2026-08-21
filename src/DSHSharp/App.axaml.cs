@@ -580,22 +580,11 @@ public partial class App : Application
             try
             {
                 UpdateServiceUi();
-                // 服务离线且可托管时自动启动（防抖：失败后 60s 冷却，避免反复拉起）。
-                if (!e.IsOnline
-                    && !_isStarting
-                    && _serviceManager is { Mode: not ManagedMode.None } manager
-                    && !manager.IsOwned
-                    && DateTime.UtcNow - _lastAutoStartAttempt > TimeSpan.FromSeconds(60))
-                {
-                    _lastAutoStartAttempt = DateTime.UtcNow;
-                    _ = StartManagedServiceAsync();
-                }
-
-                // 端口纠错：离线且未扫描过时，扫一遍常见端口，发现服务则提示切换。
+                // 离线处理：先扫描常见端口纠错，未发现服务才按托管模式自动启动。
                 if (!e.IsOnline && !_portScanDone)
                 {
                     _portScanDone = true;
-                    _ = ScanAndHintAsync();
+                    _ = HandleOfflineAsync();
                 }
             }
             catch (Exception ex)
@@ -647,8 +636,12 @@ public partial class App : Application
         };
     }
 
-    /// <summary>扫描常见端口，发现 DSH 服务时在引导页提示切换。</summary>
-    private async Task ScanAndHintAsync()
+    /// <summary>
+    /// 离线统一处理：先扫描常见端口——
+    /// 发现其他端口有 DSH 服务则提示切换（此时不启动托管，避免双服务并行）；
+    /// 未发现任何服务才按托管模式自动启动（防抖：失败后 60s 冷却）。
+    /// </summary>
+    private async Task HandleOfflineAsync()
     {
         var manager = _serviceManager;
         if (manager is null || _serviceOnline)
@@ -656,7 +649,8 @@ public partial class App : Application
             return;
         }
 
-        Log("port scan started");
+        // 1. 端口纠错扫描。
+        Log("offline: scanning common ports");
         int? found;
         try
         {
@@ -665,17 +659,29 @@ public partial class App : Application
         catch (Exception ex)
         {
             Log($"port scan failed: {ex.Message}");
-            return;
+            found = null;
         }
 
         Log($"port scan result: {found?.ToString() ?? "none"}");
-        if (found is not null && _mainWindow is not null && !_serviceOnline)
+        if (found is not null && !_serviceOnline)
         {
+            // 2. 发现其他端口的服务：提示切换，跳过托管启动。
             var port = found.Value;
             Dispatcher.UIThread.Post(() =>
             {
                 _mainWindow?.ShowPortHint(port, p => SwitchWebUrl($"http://127.0.0.1:{p}"));
             });
+            return;
+        }
+
+        // 3. 未发现：按托管模式自动启动。
+        if (manager.Mode != ManagedMode.None
+            && !manager.IsOwned
+            && !_isStarting
+            && DateTime.UtcNow - _lastAutoStartAttempt > TimeSpan.FromSeconds(60))
+        {
+            _lastAutoStartAttempt = DateTime.UtcNow;
+            _ = StartManagedServiceAsync();
         }
     }
 
