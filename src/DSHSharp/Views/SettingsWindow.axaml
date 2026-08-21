@@ -1,0 +1,81 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:DSHSharp.ViewModels"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d" d:DesignWidth="520" d:DesignHeight="560"
+        x:Class="DSHSharp.Views.SettingsWindow"
+        x:DataType="vm:SettingsViewModel"
+        Title="DSH-Sharp 设置"
+        Width="520" Height="560"
+        MinWidth="440" MinHeight="420"
+        WindowStartupLocation="CenterOwner"
+        Icon="/Assets/avalonia-logo.ico">
+
+    <Design.DataContext>
+        <vm:SettingsViewModel/>
+    </Design.DataContext>
+
+    <DockPanel Margin="20,16">
+
+        <TextBlock DockPanel.Dock="Top" Text="设置" FontSize="20" FontWeight="SemiBold" Margin="0,0,0,12"/>
+
+        <ScrollViewer DockPanel.Dock="Top">
+            <StackPanel Spacing="18">
+
+                <!-- ===== 服务 ===== -->
+                <StackPanel Spacing="8">
+                    <TextBlock Text="服务" FontSize="14" FontWeight="SemiBold"
+                               Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="服务地址"/>
+                        <TextBox Text="{Binding WebUrl}" Watermark="http://127.0.0.1:3080"/>
+                    </StackPanel>
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="托管模式"/>
+                        <ComboBox ItemsSource="{Binding ManagedModes}" SelectedItem="{Binding ManagedMode}"
+                                  HorizontalAlignment="Stretch"/>
+                        <TextBlock Text="Npx：离线时用 npx 启动官方包；Source：在源码路径下用 pnpm 启动；None：仅探测不托管。"
+                                   FontSize="11" TextWrapping="Wrap"
+                                   Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+                    </StackPanel>
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="源码路径（Source 模式）"/>
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+                            <TextBox Grid.Column="0" Text="{Binding SourcePath}"
+                                     Watermark="例如 D:\deepseek-harness"/>
+                            <Button Grid.Column="1" Content="浏览…" Click="BrowseSourcePath_OnClick"/>
+                        </Grid>
+                    </StackPanel>
+                </StackPanel>
+
+                <!-- ===== 通用 ===== -->
+                <StackPanel Spacing="8">
+                    <TextBlock Text="通用" FontSize="14" FontWeight="SemiBold"
+                               Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+                    <ToggleSwitch Content="登录时自启动" IsChecked="{Binding AutoStartEnabled}"/>
+                    <ToggleSwitch Content="关闭窗口时最小化到托盘" IsChecked="{Binding CloseToTray}"/>
+                    <ToggleSwitch Content="启动时最小化到托盘" IsChecked="{Binding StartMinimized}"/>
+                    <ToggleSwitch Content="会话完成时弹出通知" IsChecked="{Binding SessionCompleteNotifications}"/>
+                    <StackPanel Spacing="6" Margin="0,8,0,0">
+                        <TextBlock Text="主题"/>
+                        <ComboBox ItemsSource="{Binding Themes}" SelectedItem="{Binding Theme}"
+                                  HorizontalAlignment="Stretch"/>
+                    </StackPanel>
+                </StackPanel>
+
+                <TextBlock Text="服务地址/托管模式修改后，将在下次启动时生效。"
+                           FontSize="11" TextWrapping="Wrap"
+                           Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+
+            </StackPanel>
+        </ScrollViewer>
+
+        <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8"
+                    Margin="0,14,0,0">
+            <Button Content="保存" Padding="20,6" Command="{Binding SaveCommand}"/>
+            <Button Content="取消" Padding="20,6" Command="{Binding CancelCommand}"/>
+        </StackPanel>
+
+    </DockPanel>
+</Window>

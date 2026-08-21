@@ -30,6 +30,7 @@ public partial class App : Application
     private DshEventMonitor? _monitor;
     private DshServiceManager? _serviceManager;
     private MainWindow? _mainWindow;
+    private SettingsWindow? _settingsWindow;
     private TrayIcon? _trayIcon;
     private NativeMenu? _trayMenu;
     private NativeMenuItem? _trayServiceItem;
@@ -172,6 +173,56 @@ public partial class App : Application
         UpdateServiceUi();
     }
 
+    /// <summary>打开设置窗口（已打开则激活）。</summary>
+    public void OpenSettingsWindow()
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (_settingsWindow is { IsVisible: true })
+            {
+                _settingsWindow.Activate();
+                return;
+            }
+
+            _settingsWindow = new SettingsWindow(new SettingsViewModel(Settings, SaveSettings));
+            _settingsWindow.Closed += (_, _) => _settingsWindow = null;
+            _settingsWindow.Show();
+        });
+    }
+
+    /// <summary>保存设置：即时应用可生效项，持久化，提示重启生效项。</summary>
+    public void SaveSettings(AppSettings updated)
+    {
+        if (updated.AutoStartEnabled != Settings.AutoStartEnabled)
+        {
+            try
+            {
+                _autoStart.SetEnabled(updated.AutoStartEnabled);
+            }
+            catch (Exception ex)
+            {
+                Log($"autostart set failed: {ex.Message}");
+            }
+        }
+
+        if (updated.Theme != Settings.Theme)
+        {
+            ApplyTheme(updated.Theme);
+        }
+
+        var connectionChanged = updated.WebUrl != Settings.WebUrl
+            || !string.Equals(updated.ManagedMode, Settings.ManagedMode, StringComparison.OrdinalIgnoreCase)
+            || updated.SourcePath != Settings.SourcePath;
+
+        Settings = updated;
+        _settingsService.Save(Settings);
+        Log($"settings saved (connectionChanged={connectionChanged})");
+
+        _mainWindow?.ShowNotification(
+            "设置已保存",
+            connectionChanged ? "服务地址/托管模式将在下次启动时生效。" : "更改已即时生效。");
+    }
+
     private void SetupTrayIcon()
     {
         using var iconStream = AssetLoader.Open(new Uri("avares://DSHSharp/Assets/avalonia-logo.ico"));
@@ -181,6 +232,9 @@ public partial class App : Application
         var showItem = new NativeMenuItem("显示主窗口");
         showItem.Click += (_, _) => SafePost("tray:show", ActivateMainWindow);
         menu.Items.Add(showItem);
+        var settingsItem = new NativeMenuItem("设置…");
+        settingsItem.Click += (_, _) => SafePost("tray:settings", OpenSettingsWindow);
+        menu.Items.Add(settingsItem);
         menu.Items.Add(new NativeMenuItemSeparator());
         _trayServiceItem = new NativeMenuItem("本地服务");
         _trayServiceItem.Click += (_, _) => SafePost("tray:service", OnTrayServiceClick);

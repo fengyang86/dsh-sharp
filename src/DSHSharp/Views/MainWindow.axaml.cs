@@ -166,6 +166,9 @@ public partial class MainWindow : Window
     private void MinimizeButton_OnClick(object? sender, RoutedEventArgs e) =>
         WindowState = WindowState.Minimized;
 
+    private void SettingsButton_OnClick(object? sender, RoutedEventArgs e) =>
+        App.Instance?.OpenSettingsWindow();
+
     private void MaximizeButton_OnClick(object? sender, RoutedEventArgs e) =>
         WindowState = WindowState == WindowState.Maximized
             ? WindowState.Normal
