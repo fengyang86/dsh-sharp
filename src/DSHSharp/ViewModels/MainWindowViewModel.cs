@@ -24,6 +24,13 @@ public partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty]
     private string _serviceStatusText = "正在连接 DSH 服务…";
 
-    public void SetServiceOnline(bool online) =>
-        ServiceStatusText = online ? "● DSH 服务在线" : "○ DSH 服务离线";
+    /// <summary>更新服务状态栏：在线/离线、是否客户端托管、是否正在启动。</summary>
+    public void SetServiceState(bool online, bool owned, bool starting)
+    {
+        ServiceStatusText = starting
+            ? "正在启动本地 DSH 服务…"
+            : online
+                ? owned ? "● DSH 服务在线（客户端托管）" : "● DSH 服务在线"
+                : "○ DSH 服务离线";
+    }
 }

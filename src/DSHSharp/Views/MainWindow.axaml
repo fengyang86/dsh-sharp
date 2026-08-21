@@ -98,6 +98,23 @@
             <NativeWebView x:Name="Web"/>
         </Border>
 
+        <!-- ===== 引导页（服务离线时覆盖 WebView） ===== -->
+        <Border x:Name="OnboardingPanel" Grid.Row="1" IsVisible="False"
+                Background="{DynamicResource SystemControlBackgroundChromeMediumLowBrush}">
+            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="14" MaxWidth="460"
+                        Margin="32">
+                <TextBlock Text="未检测到 DSH 服务" FontSize="20" FontWeight="SemiBold"
+                           HorizontalAlignment="Center"/>
+                <TextBlock x:Name="OnboardingDetailText" TextWrapping="Wrap" TextAlignment="Center"
+                           FontSize="13" Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="8">
+                    <Button x:Name="StartServiceButton" Content="启动本地服务" Padding="16,6"
+                            Click="StartServiceButton_OnClick"/>
+                    <Button Content="重新检测" Padding="16,6" Click="RetryProbeButton_OnClick"/>
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
         <!-- ===== 状态栏 ===== -->
         <Border Grid.Row="2" Padding="12,5"
                 Background="{DynamicResource SystemControlBackgroundChromeMediumBrush}"

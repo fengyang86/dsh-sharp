@@ -190,7 +190,11 @@ public sealed class DshEventMonitor : IAsyncDisposable
 
     private async Task RunHeartbeatLoopAsync(CancellationToken ct)
     {
-        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+        // 本地服务直连，不走系统代理。
+        using var http = new HttpClient(new SocketsHttpHandler { UseProxy = false })
+        {
+            Timeout = TimeSpan.FromSeconds(5),
+        };
         bool? lastOnline = null; // null 确保首次探测必然上报一次在线状态。
         while (!ct.IsCancellationRequested)
         {

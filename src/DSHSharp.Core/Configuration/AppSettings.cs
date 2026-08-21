@@ -26,4 +26,13 @@ public sealed class AppSettings
 
     /// <summary>会话完成时弹出桌面通知。</summary>
     public bool SessionCompleteNotifications { get; set; } = true;
+
+    /// <summary>
+    /// 服务托管模式：None=纯探测不托管；Npx=离线时托管 npx @deepseek-ai/dsh；
+    /// Source=离线时在 SourcePath 下托管 pnpm dsh web。
+    /// </summary>
+    public string ManagedMode { get; set; } = "Npx";
+
+    /// <summary>源码部署仓库路径（ManagedMode=Source 时使用）。</summary>
+    public string? SourcePath { get; set; }
 }
