@@ -29,7 +29,7 @@ public sealed class DshServiceManager : IDisposable
 {
     private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan NpxReadyTimeout = TimeSpan.FromSeconds(120);
-    private static readonly TimeSpan SourceReadyTimeout = TimeSpan.FromSeconds(90);
+    private static readonly TimeSpan SourceReadyTimeout = TimeSpan.FromSeconds(180); // tsx 冷启动实测 90-150s
 
     private readonly Uri _baseUri;
     private readonly ManagedMode _mode;
