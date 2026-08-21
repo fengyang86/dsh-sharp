@@ -29,7 +29,7 @@ public sealed class DshServiceManager : IDisposable
 {
     private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan NpxReadyTimeout = TimeSpan.FromSeconds(120);
-    private static readonly TimeSpan SourceReadyTimeout = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan SourceReadyTimeout = TimeSpan.FromSeconds(90);
 
     private readonly Uri _baseUri;
     private readonly ManagedMode _mode;
@@ -37,6 +37,7 @@ public sealed class DshServiceManager : IDisposable
     private readonly string _logPath;
     private readonly SemaphoreSlim _startLock = new(1, 1);
     private Process? _process;
+    private bool _useDirectNode; // 源码模式：pnpm 不可用时用 node + tsx 直接启动
     private bool _disposed;
 
     public DshServiceManager(string baseUrl, ManagedMode mode, string? sourcePath, string? logDirectory = null)
@@ -148,15 +149,13 @@ public sealed class DshServiceManager : IDisposable
 
             if (_mode == ManagedMode.Source)
             {
-                var issue = ValidateSourcePath();
+                var issue = await ValidateSourceEnvironmentAsync(ct);
                 if (issue is not null)
                 {
                     LastError = issue;
                     return false;
                 }
-            }
-
-            LastError = null;
+            }            LastError = null;
             var psi = BuildStartInfo();
             Log?.Invoke($"starting managed service: {psi.FileName} {psi.Arguments} (workdir={psi.WorkingDirectory})");
             AppendLog($"--- DSH service managed start ({_mode}) ---");
@@ -192,11 +191,13 @@ public sealed class DshServiceManager : IDisposable
 
             if (process.HasExited)
             {
-                LastError = $"进程提前退出（退出码 {process.ExitCode}）。请查看服务日志：{_logPath}";
+                // 进程刚退出时日志可能仍在写入：短暂等待后再读取尾部。
+                await Task.Delay(TimeSpan.FromMilliseconds(500), ct);
+                LastError = WithLogTail($"进程提前退出（退出码 {process.ExitCode}），请检查仓库依赖/构建是否就绪");
             }
             else
             {
-                LastError = $"服务在 {(int)timeout.TotalSeconds}s 内未就绪。请查看服务日志：{_logPath}";
+                LastError = WithLogTail($"服务在 {(int)timeout.TotalSeconds}s 内未就绪（首次启动较慢，或端口/配置有问题）");
             }
 
             Log?.Invoke($"managed start failed: {LastError}");
@@ -270,6 +271,21 @@ public sealed class DshServiceManager : IDisposable
 
         if (_mode == ManagedMode.Source)
         {
+            // pnpm 可用时用标准方式；否则 node + tsx 直接运行源码 cli。
+            if (_useDirectNode)
+            {
+                return new ProcessStartInfo
+                {
+                    FileName = "node",
+                    Arguments = $"--import tsx/esm apps/cli/src/bin.ts web --no-open{portArg}",
+                    WorkingDirectory = _sourcePath!,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                };
+            }
+
             return new ProcessStartInfo
             {
                 FileName = "pnpm.cmd",
@@ -294,7 +310,11 @@ public sealed class DshServiceManager : IDisposable
         };
     }
 
-    private string? ValidateSourcePath()
+    /// <summary>
+    /// 源码模式启动前环境预检：路径、package.json、依赖（node_modules）、pnpm 可用性。
+    /// 返回问题描述；全部通过返回 null。
+    /// </summary>
+    private async Task<string?> ValidateSourceEnvironmentAsync(CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(_sourcePath))
         {
@@ -311,7 +331,84 @@ public sealed class DshServiceManager : IDisposable
             return $"路径下未找到 package.json（不是 DSH 仓库？）：{_sourcePath}";
         }
 
-        return null;
+        if (!Directory.Exists(Path.Combine(_sourcePath, "node_modules")))
+        {
+            return $"仓库依赖未安装：请在 {_sourcePath} 下执行 pnpm install 后再试";
+        }
+
+        // 启动方式：优先 pnpm；不可用时降级为 node + tsx 直接运行（与部分源码部署环境一致）。
+        _useDirectNode = false;
+        if (await IsCommandAvailableAsync("pnpm.cmd", "--version", ct))
+        {
+            Log?.Invoke("source mode: pnpm available");
+            return null;
+        }
+
+        if (await IsCommandAvailableAsync("node", "--version", ct) &&
+            File.Exists(Path.Combine(_sourcePath, "apps", "cli", "src", "bin.ts")))
+        {
+            _useDirectNode = true;
+            Log?.Invoke("source mode: pnpm missing, falling back to node + tsx");
+            return null;
+        }
+
+        return "未找到 pnpm 或 node：请安装 pnpm（npm install -g pnpm）后重试";
+    }
+
+    /// <summary>检测命令是否可用（执行 &lt;cmd&gt; --version，1.5s 超时）。</summary>
+    private static async Task<bool> IsCommandAvailableAsync(string fileName, string args, CancellationToken ct)
+    {
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromMilliseconds(1500));
+            using var process = Process.Start(new ProcessStartInfo
+            {
+                FileName = fileName,
+                Arguments = args,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            });
+            if (process is null)
+            {
+                return false;
+            }
+
+            await process.WaitForExitAsync(cts.Token);
+            return process.ExitCode == 0;
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or OperationCanceledException or InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>失败诊断：附带服务日志尾部，帮助用户定位（依赖/构建/配置等问题）。</summary>
+    private string WithLogTail(string message)
+    {
+        try
+        {
+            if (!File.Exists(_logPath))
+            {
+                return message;
+            }
+
+            var tail = File.ReadLines(_logPath)
+                .Where(l => !string.IsNullOrWhiteSpace(l))
+                .TakeLast(6)
+                .Select(l => l.Length > 180 ? l[..180] + "…" : l)
+                .ToArray();
+            return tail.Length > 0
+                ? $"{message}\n最近日志：\n{string.Join("\n", tail)}"
+                : message;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // 日志读取失败不影响诊断主体。
+            return message;
+        }
     }
 
     private void PumpOutput(Process process)

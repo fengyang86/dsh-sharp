@@ -150,6 +150,31 @@ public sealed class DshServiceManagerTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task StartAsync_WhenSourceDepsMissing_ReturnsInstallHint()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "dshsharp-src-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "package.json"), "{}");
+        try
+        {
+            using var manager = new DshServiceManager(
+                "http://127.0.0.1:1/",
+                ManagedMode.Source,
+                dir,
+                Path.GetTempPath());
+
+            var ok = await manager.StartAsync();
+
+            Assert.False(ok);
+            Assert.Contains("pnpm install", manager.LastError);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
     public void Dispose()
     {
         _fakeServer.Stop();
