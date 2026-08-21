@@ -27,3 +27,5 @@
 - 客户端自动更新（GitHub Releases）
 - WebView 前进/后退/刷新按钮（标题栏）
 - 快捷键（Ctrl+R 刷新等）
+- **npm 镜像源配置**：npx 慢下载环境可配置 npmmirror 镜像（注入 npm_config_registry）
+- **npx 包预下载预热**：服务在线空闲时后台拉取 npx 包，切到 npx 模式时秒级启动
