@@ -138,8 +138,12 @@
                 Background="{DynamicResource SystemControlBackgroundChromeMediumBrush}"
                 BorderThickness="0,1,0,0"
                 BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}">
-            <TextBlock Text="{Binding ServiceStatusText}" FontSize="12"
-                       Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+            <StackPanel Orientation="Horizontal" Spacing="7">
+                <Ellipse Width="8" Height="8" VerticalAlignment="Center"
+                         Fill="{Binding ServiceStatusBrush}"/>
+                <TextBlock Text="{Binding ServiceStatusText}" FontSize="12"
+                           Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+            </StackPanel>
         </Border>
 
     </Grid>

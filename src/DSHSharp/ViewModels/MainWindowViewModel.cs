@@ -1,4 +1,5 @@
 using System.Reflection;
+using Avalonia.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
 using DSHSharp.Core.Configuration;
 
@@ -24,9 +25,17 @@ public partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty]
     private string _serviceStatusText = "正在连接 DSH 服务…";
 
+    /// <summary>状态圆点颜色：在线绿 / 启动橙 / 离线灰。</summary>
+    [ObservableProperty]
+    private IBrush _serviceStatusBrush = StatusGray;
+
+    private static readonly SolidColorBrush StatusGreen = new(Color.FromRgb(0x4C, 0xAF, 0x50));
+    private static readonly SolidColorBrush StatusOrange = new(Color.FromRgb(0xFF, 0x98, 0x00));
+    private static readonly SolidColorBrush StatusGray = new(Color.FromRgb(0x9E, 0x9E, 0x9E));
+
     /// <summary>
     /// 更新服务状态栏，展示当前连接的服务身份：
-    /// 地址、托管模式、在线/离线、是否客户端托管。
+    /// 地址、托管模式、在线/离线、是否客户端托管；圆点同步着色。
     /// </summary>
     public void SetServiceState(bool online, bool owned, bool starting, string webUrl, string managedMode)
     {
@@ -37,12 +46,13 @@ public partial class MainWindowViewModel : ViewModelBase
             _ => "npx 托管",
         };
 
+        ServiceStatusBrush = starting ? StatusOrange : online ? StatusGreen : StatusGray;
         ServiceStatusText = starting
             ? $"正在启动 {webUrl}（{modeText}）…"
             : online
                 ? owned
-                    ? $"● {webUrl} · 在线（{modeText}·客户端启动）"
-                    : $"● {webUrl} · 在线（外部运行）"
-                : $"○ {webUrl} · 离线";
+                    ? $"{webUrl} · 在线（{modeText}·客户端启动）"
+                    : $"{webUrl} · 在线（外部运行）"
+                : $"{webUrl} · 离线";
     }
 }
