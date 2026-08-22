@@ -1,0 +1,4 @@
+# 将插件自身加入 DSH Loader；浏览器行为由 dsh.client 入口提供。
+- insert:
+    - id: dsh-sharp-session
+      name: '@yangfeng/dsh-sharp-session'

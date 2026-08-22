@@ -6,6 +6,9 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+    <Version>0.2.0</Version>
+    <AssemblyVersion>0.2.0.0</AssemblyVersion>
+    <FileVersion>0.2.0.0</FileVersion>
   </PropertyGroup>
 
   <ItemGroup>
@@ -28,5 +31,17 @@
 
   <ItemGroup>
     <ProjectReference Include="..\DSHSharp.Core\DSHSharp.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="..\..\plugins\dsh-sharp-session\package.json"
+             Link="Plugins\dsh-sharp-session\package.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\plugins\dsh-sharp-session\cordis.patch.yml"
+             Link="Plugins\dsh-sharp-session\cordis.patch.yml" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\plugins\dsh-sharp-session\README.md"
+             Link="Plugins\dsh-sharp-session\README.md" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\plugins\dsh-sharp-session\lib\**\*"
+             Link="Plugins\dsh-sharp-session\lib\%(RecursiveDir)%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

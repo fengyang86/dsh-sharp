@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Text;
+using System.Text.Json;
 
 namespace DSHSharp.Core.Dsh;
 
@@ -8,7 +10,7 @@ public enum ManagedMode
     /// <summary>纯探测，不托管任何服务进程。</summary>
     None,
 
-    /// <summary>离线时托管 <c>npx @deepseek-ai/dsh</c>（普通用户默认）。</summary>
+    /// <summary>离线时托管私有目录中安装的官方 npm 包（普通用户默认）。</summary>
     Npx,
 
     /// <summary>离线时在源码路径下托管 <c>pnpm dsh web</c>（源码部署）。</summary>
@@ -19,7 +21,7 @@ public enum ManagedMode
 /// DSH 服务进程托管：
 /// <list type="bullet">
 /// <item>探测服务在线状态（与 DshEventMonitor 的心跳互补，供启动前/就绪轮询使用）；</item>
-/// <item>按托管模式拉起服务进程（npx 或源码 pnpm），等待端口就绪；</item>
+/// <item>按托管模式拉起服务进程（私有 npm 包或源码 pnpm），等待端口就绪；</item>
 /// <item>所有权语义：只有本管理器拉起的进程才会被 Stop/Dispose 终止；</item>
 /// <item>进程输出重定向到日志文件，意外退出触发事件。</item>
 /// </list>
@@ -30,11 +32,16 @@ public sealed class DshServiceManager : IDisposable
     private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan NpxReadyTimeout = TimeSpan.FromSeconds(120);
     private static readonly TimeSpan SourceReadyTimeout = TimeSpan.FromSeconds(180); // tsx 冷启动实测 90-150s
+    private const string ManagedPackageName = "@deepseek-ai/dsh";
+    private const string ManagedPnpmSpec = "pnpm@11.19.0";
 
     private readonly Uri _baseUri;
     private readonly ManagedMode _mode;
     private readonly string? _sourcePath;
     private readonly string _logPath;
+    private readonly string _packageDirectory;
+    private readonly string _packageToolsDirectory;
+    private readonly string _bundledShortcutPluginDirectory;
     private readonly SemaphoreSlim _startLock = new(1, 1);
     private Process? _process;
     private bool _useDirectNode; // 源码模式：pnpm 不可用时用 node + tsx 直接启动
@@ -48,6 +55,9 @@ public sealed class DshServiceManager : IDisposable
         var dir = logDirectory ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DSHSharp");
         _logPath = Path.Combine(dir, "dsh-service.log");
+        _packageDirectory = Path.Combine(dir, "dsh-runtime");
+        _packageToolsDirectory = Path.Combine(_packageDirectory, ".tools");
+        _bundledShortcutPluginDirectory = Path.Combine(AppContext.BaseDirectory, "Plugins", "dsh-sharp-session");
     }
 
     /// <summary>可选的日志回调（由宿主注入）。</summary>
@@ -61,6 +71,9 @@ public sealed class DshServiceManager : IDisposable
 
     /// <summary>最近一次启动失败原因（成功启动后清空）。</summary>
     public string? LastError { get; private set; }
+
+    /// <summary>私有 npm 包当前安装的版本；未安装或元数据损坏时返回 null。</summary>
+    public string? InstalledPackageVersion => ReadInstalledPackageVersion();
 
     /// <summary>托管进程意外退出时触发（服务崩溃）。</summary>
     public event EventHandler? ProcessExitedUnexpectedly;
@@ -155,7 +168,14 @@ public sealed class DshServiceManager : IDisposable
                     LastError = issue;
                     return false;
                 }
-            }            LastError = null;
+            }
+            else if (!await EnsurePrivatePackageAsync(forceUpdate: false, ct) ||
+                     !await EnsureBundledPluginsAsync(ct))
+            {
+                return false;
+            }
+
+            LastError = null;
             var psi = BuildStartInfo();
             Log?.Invoke($"starting managed service: {psi.FileName} {psi.Arguments} (workdir={psi.WorkingDirectory})");
             AppendLog($"--- DSH service managed start ({_mode}) ---");
@@ -215,6 +235,27 @@ public sealed class DshServiceManager : IDisposable
     {
         Log?.Invoke("stopping managed service (owned)");
         KillOwnedProcess();
+    }
+
+    /// <summary>将私有目录中的 DSH 官方包显式升级到 npm latest。不会自动启动服务。</summary>
+    public async Task<bool> UpdatePrivatePackageAsync(string? targetVersion = null, CancellationToken ct = default)
+    {
+        await _startLock.WaitAsync(ct);
+        try
+        {
+            if (_disposed || _mode != ManagedMode.Npx)
+            {
+                LastError = "当前不是官方包托管模式";
+                return false;
+            }
+
+            KillOwnedProcess();
+            return await EnsurePrivatePackageAsync(forceUpdate: true, ct: ct, targetVersion: targetVersion);
+        }
+        finally
+        {
+            _startLock.Release();
+        }
     }
 
     /// <summary>释放：仅终止本客户端拉起的服务进程。</summary>
@@ -288,7 +329,7 @@ public sealed class DshServiceManager : IDisposable
 
             return new ProcessStartInfo
             {
-                FileName = "pnpm.cmd",
+                FileName = CommandName("pnpm"),
                 Arguments = $"dsh web --no-open{portArg}",
                 WorkingDirectory = _sourcePath!,
                 UseShellExecute = false,
@@ -298,16 +339,386 @@ public sealed class DshServiceManager : IDisposable
             };
         }
 
-        return new ProcessStartInfo
+        var privateStartInfo = new ProcessStartInfo
         {
-            FileName = "cmd.exe",
-            Arguments = $"/c npx --yes @deepseek-ai/dsh@latest web --no-open{portArg}",
-            WorkingDirectory = Path.GetTempPath(),
+            FileName = "node",
+            WorkingDirectory = _packageDirectory,
             UseShellExecute = false,
             CreateNoWindow = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
         };
+        privateStartInfo.ArgumentList.Add(PrivateDshEntryPath);
+        privateStartInfo.ArgumentList.Add("web");
+        privateStartInfo.ArgumentList.Add("--no-open");
+        if (!_baseUri.IsDefaultPort)
+        {
+            privateStartInfo.ArgumentList.Add("--port");
+            privateStartInfo.ArgumentList.Add(_baseUri.Port.ToString());
+        }
+
+        return privateStartInfo;
+    }
+
+    /// <summary>首次运行通过私有 pnpm 安装 latest 并固定版本；后续启动复用该版本。</summary>
+    private async Task<bool> EnsurePrivatePackageAsync(bool forceUpdate, CancellationToken ct, string? targetVersion = null)
+    {
+        if (!forceUpdate && File.Exists(PrivateDshEntryPath) && File.Exists(PrivatePnpmEntryPath) &&
+            ReadInstalledPackageVersion() is not null)
+        {
+            return true;
+        }
+
+        Directory.CreateDirectory(_packageDirectory);
+        Directory.CreateDirectory(_packageToolsDirectory);
+        WritePrivatePnpmManifest();
+        AppendLog(forceUpdate
+            ? "--- updating private DSH package ---"
+            : "--- installing private DSH package ---");
+
+        try
+        {
+            if (!File.Exists(PrivatePnpmEntryPath))
+            {
+                AppendLog("bootstrapping private pnpm");
+                var bootstrapExitCode = await RunInstallProcessAsync(BuildPnpmBootstrapStartInfo(), ct);
+                if (bootstrapExitCode != 0 || !File.Exists(PrivatePnpmEntryPath))
+                {
+                    LastError = WithLogTail($"私有 pnpm 安装失败（npm 退出码 {bootstrapExitCode}）");
+                    return false;
+                }
+            }
+
+            WritePrivatePnpmWorkspaceConfig();
+            AppendLog(forceUpdate ? "updating DSH with private pnpm" : "installing DSH with private pnpm");
+            var installExitCode = await RunInstallProcessAsync(BuildDshInstallStartInfo(targetVersion), ct);
+            if (installExitCode != 0 || !File.Exists(PrivateDshEntryPath))
+            {
+                LastError = WithLogTail($"DSH 官方包安装失败（pnpm 退出码 {installExitCode}）");
+                return false;
+            }
+
+            var version = ReadInstalledPackageVersion();
+            LastError = null;
+            Log?.Invoke($"private DSH package ready, version={version ?? "unknown"}");
+            return true;
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or IOException)
+        {
+            LastError = WithLogTail($"DSH 官方包安装失败：{ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>确保随客户端发布的 DSH 插件已链接到 web 配置。</summary>
+    private async Task<bool> EnsureBundledPluginsAsync(CancellationToken ct)
+    {
+        var manifestPath = Path.Combine(_bundledShortcutPluginDirectory, "package.json");
+        if (!File.Exists(manifestPath))
+        {
+            LastError = $"内置快捷键插件缺失：{manifestPath}";
+            return false;
+        }
+
+        var expectedSpec = $"link:{Path.GetFullPath(_bundledShortcutPluginDirectory).Replace('\\', '/')}";
+        var profileManifest = GetWebProfileManifestPath();
+        if (IsProfileDependencyCurrent(profileManifest, "@yangfeng/dsh-sharp-session", expectedSpec))
+        {
+            return await RemoveLegacyShortcutPluginAsync(profileManifest, ct);
+        }
+
+        AppendLog("--- installing bundled dsh-sharp-session plugin ---");
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "node",
+                WorkingDirectory = _packageDirectory,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            var privateToolsBin = Path.Combine(_packageToolsDirectory, "node_modules", ".bin");
+            var privatePackageBin = Path.Combine(_packageDirectory, "node_modules", ".bin");
+            startInfo.Environment["PATH"] = string.Join(
+                Path.PathSeparator,
+                privateToolsBin,
+                privatePackageBin,
+                Environment.GetEnvironmentVariable("PATH") ?? string.Empty);
+            startInfo.ArgumentList.Add(PrivateDshEntryPath);
+            startInfo.ArgumentList.Add("plugin");
+            startInfo.ArgumentList.Add("--profile");
+            startInfo.ArgumentList.Add("web");
+            startInfo.ArgumentList.Add("add");
+            startInfo.ArgumentList.Add(expectedSpec);
+
+            using var process = Process.Start(startInfo);
+            if (process is null)
+            {
+                LastError = "无法启动 DSH 插件安装命令";
+                return false;
+            }
+
+            PumpOutput(process);
+            await process.WaitForExitAsync(ct);
+            if (process.ExitCode != 0 ||
+                !IsProfileDependencyCurrent(profileManifest, "@yangfeng/dsh-sharp-session", expectedSpec))
+            {
+                LastError = WithLogTail($"内置快捷键插件安装失败（DSH 退出码 {process.ExitCode}）");
+                return false;
+            }
+
+            Log?.Invoke("bundled dsh-sharp-session plugin ready");
+            return await RemoveLegacyShortcutPluginAsync(profileManifest, ct);
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or IOException)
+        {
+            LastError = WithLogTail($"内置快捷键插件安装失败：{ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>迁移旧快捷键包，避免新旧插件同时注册 Esc 监听器。</summary>
+    private async Task<bool> RemoveLegacyShortcutPluginAsync(string profileManifest, CancellationToken ct)
+    {
+        const string legacyPackage = "@yangfeng/dsh-shortcuts";
+        if (!HasProfileDependency(profileManifest, legacyPackage))
+        {
+            return true;
+        }
+
+        AppendLog("--- removing legacy dsh-shortcuts plugin ---");
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "node",
+                WorkingDirectory = _packageDirectory,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            var privateToolsBin = Path.Combine(_packageToolsDirectory, "node_modules", ".bin");
+            var privatePackageBin = Path.Combine(_packageDirectory, "node_modules", ".bin");
+            startInfo.Environment["PATH"] = string.Join(
+                Path.PathSeparator,
+                privateToolsBin,
+                privatePackageBin,
+                Environment.GetEnvironmentVariable("PATH") ?? string.Empty);
+            startInfo.ArgumentList.Add(PrivateDshEntryPath);
+            startInfo.ArgumentList.Add("plugin");
+            startInfo.ArgumentList.Add("--profile");
+            startInfo.ArgumentList.Add("web");
+            startInfo.ArgumentList.Add("remove");
+            startInfo.ArgumentList.Add(legacyPackage);
+
+            var exitCode = await RunInstallProcessAsync(startInfo, ct);
+            if (exitCode != 0 || HasProfileDependency(profileManifest, legacyPackage))
+            {
+                LastError = WithLogTail($"旧快捷键插件迁移失败（DSH 退出码 {exitCode}）");
+                return false;
+            }
+
+            Log?.Invoke("legacy dsh-shortcuts plugin removed");
+            return true;
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or IOException)
+        {
+            LastError = WithLogTail($"旧快捷键插件迁移失败：{ex.Message}");
+            return false;
+        }
+    }
+
+    private static bool HasProfileDependency(string profileManifest, string packageName)
+    {
+        try
+        {
+            if (!File.Exists(profileManifest))
+            {
+                return false;
+            }
+
+            using var document = JsonDocument.Parse(File.ReadAllText(profileManifest));
+            return document.RootElement.TryGetProperty("dependencies", out var dependencies) &&
+                   dependencies.TryGetProperty(packageName, out _);
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private static string GetWebProfileManifestPath()
+    {
+        var dshHome = Environment.GetEnvironmentVariable("DSH_HOME");
+        if (string.IsNullOrWhiteSpace(dshHome))
+        {
+            dshHome = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".dsh");
+        }
+
+        return Path.Combine(dshHome, "profiles", "web", "package.json");
+    }
+
+    /// <summary>判断 web 配置中的插件依赖是否已指向当前内置目录。</summary>
+    public static bool IsProfileDependencyCurrent(
+        string profileManifest,
+        string packageName,
+        string expectedSpec)
+    {
+        try
+        {
+            if (!File.Exists(profileManifest))
+            {
+                return false;
+            }
+
+            using var document = JsonDocument.Parse(File.ReadAllText(profileManifest));
+            return document.RootElement.TryGetProperty("dependencies", out var dependencies) &&
+                   dependencies.TryGetProperty(packageName, out var spec) &&
+                   string.Equals(spec.GetString()?.Replace('\\', '/'), expectedSpec, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private string PrivateDshEntryPath => Path.Combine(
+        _packageDirectory,
+        "node_modules",
+        "@deepseek-ai",
+        "dsh",
+        "lib",
+        "bin.js");
+
+    private string PrivatePnpmEntryPath => Path.Combine(
+        _packageToolsDirectory,
+        "node_modules",
+        "pnpm",
+        "bin",
+        "pnpm.cjs");
+
+    private static string CommandName(string name) => OperatingSystem.IsWindows() ? $"{name}.cmd" : name;
+
+    private ProcessStartInfo BuildPnpmBootstrapStartInfo()
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = OperatingSystem.IsWindows()
+                ? Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe"
+                : "npm",
+            WorkingDirectory = _packageToolsDirectory,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        if (OperatingSystem.IsWindows())
+        {
+            startInfo.ArgumentList.Add("/d");
+            startInfo.ArgumentList.Add("/s");
+            startInfo.ArgumentList.Add("/c");
+            startInfo.ArgumentList.Add(
+                $"npm install --no-audit --no-fund --save-exact {ManagedPnpmSpec}");
+            return startInfo;
+        }
+
+        startInfo.ArgumentList.Add("install");
+        startInfo.ArgumentList.Add("--no-audit");
+        startInfo.ArgumentList.Add("--no-fund");
+        startInfo.ArgumentList.Add("--save-exact");
+        startInfo.ArgumentList.Add(ManagedPnpmSpec);
+        return startInfo;
+    }
+
+    private ProcessStartInfo BuildDshInstallStartInfo(string? targetVersion = null)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "node",
+            WorkingDirectory = _packageDirectory,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        startInfo.ArgumentList.Add(PrivatePnpmEntryPath);
+        startInfo.ArgumentList.Add("add");
+        startInfo.ArgumentList.Add("--save-exact");
+        // latest 标签可能被 pnpm 元数据缓存滞留；首次安装和显式更新应优先向 registry 复核。
+        startInfo.ArgumentList.Add("--prefer-online");
+        startInfo.ArgumentList.Add($"{ManagedPackageName}@{targetVersion ?? "latest"}");
+        return startInfo;
+    }
+
+    private async Task<int> RunInstallProcessAsync(ProcessStartInfo startInfo, CancellationToken ct)
+    {
+        using var process = Process.Start(startInfo);
+        if (process is null)
+        {
+            return -1;
+        }
+
+        PumpOutput(process);
+        await process.WaitForExitAsync(ct);
+        return process.ExitCode;
+    }
+
+    private void WritePrivatePnpmWorkspaceConfig()
+    {
+        const string config = """
+            allowBuilds:
+              esbuild: true
+              node-pty: true
+              koffi: true
+              '@google/genai': false
+              protobufjs: false
+              node-addon-require-builtin: false
+            """;
+        File.WriteAllText(
+            Path.Combine(_packageDirectory, "pnpm-workspace.yaml"),
+            config + Environment.NewLine,
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+    }
+
+    private void WritePrivatePnpmManifest()
+    {
+        const string manifest = """
+            {
+              "name": "dsh-sharp-private-tools",
+              "private": true
+            }
+            """;
+        File.WriteAllText(
+            Path.Combine(_packageToolsDirectory, "package.json"),
+            manifest + Environment.NewLine,
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+    }
+
+    private string? ReadInstalledPackageVersion()
+    {
+        var packageJson = Path.Combine(
+            _packageDirectory, "node_modules", "@deepseek-ai", "dsh", "package.json");
+        try
+        {
+            if (!File.Exists(packageJson))
+            {
+                return null;
+            }
+
+            using var document = JsonDocument.Parse(File.ReadAllText(packageJson));
+            return document.RootElement.TryGetProperty("version", out var version)
+                ? version.GetString()
+                : null;
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     /// <summary>

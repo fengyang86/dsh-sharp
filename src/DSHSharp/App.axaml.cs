@@ -9,6 +9,7 @@ using Avalonia.Styling;
 using Avalonia.Threading;
 using DSHSharp.Core.Configuration;
 using DSHSharp.Core.Dsh;
+using DSHSharp.Core.Compatibility;
 using DSHSharp.Core.Services;
 using DSHSharp.ViewModels;
 using DSHSharp.Views;
@@ -639,7 +640,7 @@ public partial class App : Application
     }
 
     /// <summary>
-    /// 检查 DSH 版本：当前运行版本 + 按托管模式查询最新版本（npx→npm registry；源码→git 远端）。
+    /// 检查 DSH-Sharp 与 DSH 版本，并报告当前托管模式下的兼容状态。
     /// 返回可直接展示的文本。
     /// </summary>
     public async Task<string> CheckDshVersionAsync()
@@ -658,37 +659,21 @@ public partial class App : Application
         current ??= "未知";
         try
         {
+            var installed = _serviceManager?.InstalledPackageVersion;
             if (string.Equals(Settings.ManagedMode, "Source", StringComparison.OrdinalIgnoreCase))
             {
-                var repo = Settings.SourcePath;
-                if (string.IsNullOrEmpty(repo))
-                {
-                    return $"运行版本：{current}（源码模式未配置路径）";
-                }
-
-                var local = await GitHeadAsync(repo, remote: false);
-                var remote = await GitHeadAsync(repo, remote: true);
-                var localShort = local is null ? "未知" : local[..Math.Min(8, local.Length)];
-                var remoteShort = remote is null ? "未知" : remote[..Math.Min(8, remote.Length)];
-                if (remote is not null && local == remote)
-                {
-                    return $"运行版本：{current}（源码 {localShort}，已是最新）";
-                }
-
-                return remote is null
-                    ? $"运行版本：{current}（源码 {localShort}；远端检查失败，无网络或未配置 remote）"
-                    : $"运行版本：{current}（源码 {localShort} → 远端 {remoteShort}，需要 git pull）";
+                return $"DSH-Sharp：{DshSharpCompatibility.ProductVersion}\nDSH 运行版本：{current}\n支持范围：{DshSharpCompatibility.SupportedRange}\n源码模式：版本由开发者管理";
             }
 
             var latest = await api.GetNpmLatestVersionAsync();
             if (latest is null)
             {
-                return $"运行版本：{current}（最新版查询失败，请检查网络）";
+                return $"DSH-Sharp：{DshSharpCompatibility.ProductVersion}\nDSH 运行版本：{current}\n私有安装版本：{installed ?? "未安装"}\n支持范围：{DshSharpCompatibility.SupportedRange}\nnpm 最新版本：查询失败";
             }
-
-            return current == latest
-                ? $"运行版本：{current}（已是最新）"
-                : $"运行版本：{current}，最新：{latest}（重启托管服务即更新）";
+            var status = !DshSharpCompatibility.IsCompatible(current) ? "当前运行版本不兼容，请先升级客户端" :
+                !DshSharpCompatibility.IsCompatible(latest) ? "npm 最新版本超出当前客户端支持范围" :
+                current == latest ? "已是最新" : "有兼容更新";
+            return $"DSH-Sharp：{DshSharpCompatibility.ProductVersion}\nDSH 运行版本：{current}\n私有安装版本：{installed ?? "未安装"}\nnpm 最新版本：{latest}\n支持范围：{DshSharpCompatibility.SupportedRange}\n兼容状态：{status}";
         }
         catch (Exception ex)
         {
@@ -696,68 +681,47 @@ public partial class App : Application
         }
     }
 
-    /// <summary>更新服务：npx 模式=停止并重启托管（拉取最新包）；源码模式=提示 git pull。</summary>
-    public void UpdateManagedService()
+    /// <summary>更新服务：官方包模式只升级支持范围内的私有包；源码模式由开发者管理。</summary>
+    public async void UpdateManagedService()
     {
         if (string.Equals(Settings.ManagedMode, "Source", StringComparison.OrdinalIgnoreCase))
         {
             _mainWindow?.ShowNotification(
                 "源码模式更新",
-                $"请在 {Settings.SourcePath ?? "源码路径"} 执行 git pull 更新源码，\n然后停止/启动本地服务或重启客户端。");
+                "DSH-Sharp 不管理源码、依赖和构建；请由开发者完成更新后重启服务。");
             return;
         }
 
-        Log("updating npx-managed service: stop and restart");
-        _serviceManager?.Stop();
+        var manager = _serviceManager;
+        if (manager is null)
+        {
+            return;
+        }
+
+        Log("updating privately managed DSH package");
+        _isStarting = true;
+        UpdateServiceUi();
+        string? targetVersion = null;
+        try { targetVersion = await (_apiClient ?? new DshApiClient(Settings.WebUrl)).GetNpmLatestVersionAsync(); }
+        catch { }
+        if (!DshSharpCompatibility.IsCompatible(targetVersion))
+        {
+            _isStarting = false;
+            _mainWindow?.ShowNotification("DSH 更新已阻止", $"npm 版本 {targetVersion ?? "未知"} 不在支持范围 {DshSharpCompatibility.SupportedRange} 内");
+            UpdateServiceUi();
+            return;
+        }
+        var updated = await manager.UpdatePrivatePackageAsync(targetVersion);
+        _isStarting = false;
+        if (!updated)
+        {
+            _mainWindow?.ShowNotification("DSH 更新失败", manager.LastError ?? "未知错误");
+            UpdateServiceUi();
+            return;
+        }
+
         _portScanDone = false;
-        _ = StartManagedServiceAsync();
-    }
-
-    /// <summary>读取 git 仓库 HEAD：本地 rev-parse 或远端 ls-remote（短超时，失败返回 null）。</summary>
-    private static async Task<string?> GitHeadAsync(string repoPath, bool remote)
-    {
-        try
-        {
-            var psi = new ProcessStartInfo
-            {
-                FileName = "git",
-                WorkingDirectory = repoPath,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-            };
-            psi.ArgumentList.Add(remote ? "ls-remote" : "rev-parse");
-            if (remote)
-            {
-                psi.ArgumentList.Add("origin");
-                psi.ArgumentList.Add("HEAD");
-            }
-            else
-            {
-                psi.ArgumentList.Add("HEAD");
-            }
-
-            using var process = Process.Start(psi);
-            if (process is null)
-            {
-                return null;
-            }
-
-            var output = await process.StandardOutput.ReadToEndAsync();
-            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(15));
-            if (process.ExitCode != 0)
-            {
-                return null;
-            }
-
-            var line = output.Trim();
-            return remote ? line.Split('\t')[0] : line;
-        }
-        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or TimeoutException or InvalidOperationException)
-        {
-            return null;
-        }
+        await StartManagedServiceAsync();
     }
 
     /// <summary>设置页显示的当前服务状态卡片文本（地址/模式/状态/错误）。</summary>
@@ -767,7 +731,7 @@ public partial class App : Application
         {
             "None" => "不托管（仅探测）",
             "Source" => "源码托管（pnpm/node）",
-            _ => "npx 托管（官方包）",
+            _ => "私有目录托管（官方包）",
         };
 
         var status = _serviceManager?.IsOwned ?? false
@@ -794,7 +758,7 @@ public partial class App : Application
         {
             ManagedMode.None => "当前为纯探测模式（未托管）。请手动启动 DSH 服务，或在设置中开启托管。",
             ManagedMode.Source => "将使用配置的源码路径启动 DSH 服务（pnpm dsh web --no-open）。请确认已执行 pnpm install && pnpm run build。",
-            _ => "将自动启动本地 DSH 服务（npx @deepseek-ai/dsh）。首次启动需要联网下载，请稍候。",
+            _ => "将从 DSH-Sharp 私有目录启动官方 DSH 包。首次启动需要联网安装，后续直接复用固定版本。",
         };
     }
 

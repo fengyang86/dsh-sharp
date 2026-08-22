@@ -87,7 +87,7 @@ public partial class ServiceProfileItem : ViewModelBase
             {
                 "None" => "不托管",
                 "Source" => "源码",
-                _ => "npx",
+                _ => "官方包",
             };
             return $"{modeText} · {WebUrl}";
         }
@@ -145,17 +145,17 @@ public partial class SettingsViewModel : ViewModelBase
 
     // ---- 导航 ----
 
-    public string[] Sections { get; } = ["服务配置", "通用", "版本更新", "关于"];
+    public string[] Sections { get; } = ["连接", "插件", "偏好设置", "关于与更新"];
 
     [ObservableProperty]
-    private string _selectedSection = "服务配置";
+    private string _selectedSection = "连接";
 
     partial void OnSelectedSectionChanged(string value)
     {
-        ShowProfiles = value == "服务配置";
-        ShowGeneral = value == "通用";
-        ShowVersion = value == "版本更新";
-        ShowAbout = value == "关于";
+        ShowProfiles = value == "连接";
+        ShowPlugins = value == "插件";
+        ShowGeneral = value == "偏好设置";
+        ShowAbout = value == "关于与更新";
     }
 
     [ObservableProperty]
@@ -163,6 +163,9 @@ public partial class SettingsViewModel : ViewModelBase
 
     [ObservableProperty]
     private bool _showGeneral;
+
+    [ObservableProperty]
+    private bool _showPlugins;
 
     [ObservableProperty]
     private bool _showVersion;
@@ -347,6 +350,9 @@ public partial class SettingsViewModel : ViewModelBase
 
     private bool CanCheckUpdate() => !IsCheckingUpdate;
 
+    public bool CanUpdateOfficialPackage =>
+        string.Equals(_settings.ManagedMode, "Npx", StringComparison.OrdinalIgnoreCase);
+
     [RelayCommand]
     private void UpdateService() => _updateService();
 
@@ -363,6 +369,6 @@ public partial class SettingsViewModel : ViewModelBase
     public string AboutText =>
         "DSH-Sharp · DeepSeek Harness 桌面客户端\n" +
         $".NET 10 + Avalonia\n" +
-        $"版本 {System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.1.0"}\n" +
+        $"客户端版本 {System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.2.0"}\n" +
         "MIT License";
 }

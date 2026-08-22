@@ -175,6 +175,71 @@ public sealed class DshServiceManagerTests : IDisposable
         }
     }
 
+    [Fact]
+    public void InstalledPackageVersion_WhenPrivatePackageExists_ReturnsVersion()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "dshsharp-package-test-" + Guid.NewGuid().ToString("N"));
+        var packageDir = Path.Combine(dir, "dsh-runtime", "node_modules", "@deepseek-ai", "dsh");
+        Directory.CreateDirectory(packageDir);
+        File.WriteAllText(Path.Combine(packageDir, "package.json"), "{\"version\":\"1.2.3\"}");
+        try
+        {
+            using var manager = new DshServiceManager(
+                "http://127.0.0.1:1/", ManagedMode.Npx, null, dir);
+
+            Assert.Equal("1.2.3", manager.InstalledPackageVersion);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void IsProfileDependencyCurrent_WhenLinkMatches_ReturnsTrue()
+    {
+        var manifest = WriteProfileManifest(
+            "{\"dependencies\":{\"@yangfeng/dsh-sharp-session\":\"link:D:/apps/dsh-sharp-session\"}}");
+        try
+        {
+            Assert.True(DshServiceManager.IsProfileDependencyCurrent(
+                manifest,
+                "@yangfeng/dsh-sharp-session",
+                "link:D:/apps/dsh-sharp-session"));
+        }
+        finally
+        {
+            File.Delete(manifest);
+        }
+    }
+
+    [Theory]
+    [InlineData("{\"dependencies\":{\"@yangfeng/dsh-sharp-session\":\"link:D:/old\"}}")]
+    [InlineData("{\"dependencies\":{}}")]
+    [InlineData("{not json")]
+    public void IsProfileDependencyCurrent_WhenMissingStaleOrInvalid_ReturnsFalse(string json)
+    {
+        var manifest = WriteProfileManifest(json);
+        try
+        {
+            Assert.False(DshServiceManager.IsProfileDependencyCurrent(
+                manifest,
+                "@yangfeng/dsh-sharp-session",
+                "link:D:/apps/dsh-sharp-session"));
+        }
+        finally
+        {
+            File.Delete(manifest);
+        }
+    }
+
+    private static string WriteProfileManifest(string json)
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"dshsharp-profile-{Guid.NewGuid():N}.json");
+        File.WriteAllText(path, json);
+        return path;
+    }
+
     public void Dispose()
     {
         _fakeServer.Stop();

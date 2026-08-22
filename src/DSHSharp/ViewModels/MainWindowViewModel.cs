@@ -43,7 +43,7 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             "None" => "不托管",
             "Source" => "源码托管",
-            _ => "npx 托管",
+            _ => "官方包托管",
         };
 
         ServiceStatusBrush = starting ? StatusOrange : online ? StatusGreen : StatusGray;

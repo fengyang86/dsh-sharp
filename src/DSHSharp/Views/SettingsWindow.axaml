@@ -127,6 +127,20 @@
                     </Grid>
                 </StackPanel>
 
+                <!-- ===== 面板：插件 ===== -->
+                <StackPanel IsVisible="{Binding ShowPlugins}" Spacing="12">
+                    <TextBlock Text="插件" FontSize="16" FontWeight="SemiBold"/>
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                        <StackPanel Spacing="4">
+                            <TextBlock Text="dsh-sharp-session" FontWeight="SemiBold"/>
+                            <TextBlock Text="Esc 停止当前运行会话；对话框和菜单优先处理 Esc。"
+                                       FontSize="12" TextWrapping="Wrap"
+                                       Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+                        </StackPanel>
+                        <TextBlock Grid.Column="1" Text="随客户端提供" VerticalAlignment="Center"/>
+                    </Grid>
+                </StackPanel>
+
                 <!-- ===== 面板：通用 ===== -->
                 <StackPanel IsVisible="{Binding ShowGeneral}" Spacing="10">
                     <TextBlock Text="通用" FontSize="16" FontWeight="SemiBold"/>
@@ -142,23 +156,19 @@
                     </StackPanel>
                 </StackPanel>
 
-                <!-- ===== 面板：版本更新 ===== -->
-                <StackPanel IsVisible="{Binding ShowVersion}" Spacing="10">
-                    <TextBlock Text="版本更新" FontSize="16" FontWeight="SemiBold"/>
-                    <TextBlock Text="npx 模式对比 npm 最新发布版；源码模式对比仓库最新提交。"
-                               FontSize="12" TextWrapping="Wrap"
+                <!-- ===== 面板：关于 ===== -->
+                <StackPanel IsVisible="{Binding ShowAbout}" Spacing="10">
+                    <TextBlock Text="关于与更新" FontSize="16" FontWeight="SemiBold"/>
+                    <TextBlock Text="{Binding AboutText}" FontSize="13" LineHeight="22" TextWrapping="Wrap"/>
+                    <TextBlock Text="客户端版本、DSH 运行版本和 npm 可用版本彼此独立；更新只会安装当前客户端支持范围内的 DSH 版本。"
+                               FontSize="12" TextWrapping="Wrap" LineHeight="18"
                                Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
                     <TextBlock Text="{Binding VersionInfoText}" FontSize="12" TextWrapping="Wrap" LineHeight="18"/>
                     <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Button Content="检查更新" Padding="14,5" Command="{Binding CheckUpdateCommand}"/>
-                        <Button Content="更新服务" Padding="14,5" Command="{Binding UpdateServiceCommand}"/>
+                        <Button Content="检查版本与兼容性" Padding="14,5" Command="{Binding CheckUpdateCommand}"/>
+                        <Button Content="更新兼容 DSH" Padding="14,5" Command="{Binding UpdateServiceCommand}"
+                                IsEnabled="{Binding CanUpdateOfficialPackage}"/>
                     </StackPanel>
-                </StackPanel>
-
-                <!-- ===== 面板：关于 ===== -->
-                <StackPanel IsVisible="{Binding ShowAbout}" Spacing="10">
-                    <TextBlock Text="关于" FontSize="16" FontWeight="SemiBold"/>
-                    <TextBlock Text="{Binding AboutText}" FontSize="13" LineHeight="22" TextWrapping="Wrap"/>
                 </StackPanel>
 
             </StackPanel>

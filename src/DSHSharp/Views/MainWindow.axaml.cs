@@ -3,7 +3,6 @@ using Avalonia.Animation;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
-using Avalonia.Threading;
 using DSHSharp.Core.Configuration;
 using DSHSharp.ViewModels;
 
@@ -25,7 +24,8 @@ public partial class MainWindow : Window
         _settings = settings;
         InitializeComponent();
 
-        DataContext = new MainWindowViewModel(settings);
+        var viewModel = new MainWindowViewModel(settings);
+        DataContext = viewModel;
 
         Web.Source = new Uri(_settings.WebUrl);
 

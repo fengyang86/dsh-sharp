@@ -4,7 +4,21 @@
 > 架构原则：**壳不做业务**——所有 DSH 交互走官方协议（HTTP RPC + WebSocket 事件流），
 > UI 层与服务层分离，连接（Connection）为一等公民，为多标签多连接预留。
 
-## 1. 解决方案结构
+## 0. 产品边界与扩展主线
+
+- **官方包模式**：客户端管理私有安装目录、固定版本、显式更新和进程生命周期。
+- **源码模式**：客户端只连接、启动和停止；源码版本、Git、依赖和构建由开发者管理。
+- **纯探测模式**：客户端只连接已有服务，不管理服务端环境。
+- **统一命令入口**：快捷键、托盘、窗口按钮和未来插件动作复用同一客户端命令。
+- **连接归属**：命令、快捷键和 DSH 增强插件最终都归属于明确的连接与当前会话。
+- **插件边界**：客户端是宿主，功能按领域拆分为 DSH 插件；不开放任意 .NET DLL 客户端插件。
+- **插件组织**：插件按功能域拆分（会话、工作区、集成等），客户端按内置插件套件统一安装、升级和管理。
+
+## 1. 版本契约
+
+DSH-Sharp `0.2.0` 支持 DSH `>=0.1.0-rc.8 <0.2.0`，已验证 `0.1.0-rc.8` 和 `0.1.1-rc.2`。客户端版本、运行服务版本、私有安装版本和 npm 最新版本始终分开建模；更新边界由 `DSHSharp.Core.Compatibility.DshSharpCompatibility` 统一判断。详见 [versioning.md](versioning.md)。
+
+## 2. 解决方案结构
 
 ```
 DSHSharp.slnx
@@ -25,7 +39,7 @@ DSHSharp.slnx
 └── tests/DSHSharp.Core.Tests/     # 34 项单元测试
 ```
 
-## 2. 分层职责
+## 3. 分层职责
 
 ### 2.1 DSHSharp.Core（服务层）
 
@@ -52,7 +66,7 @@ DSHSharp.slnx
 | `SettingsWindow` | 左侧导航：服务配置（多配置管理）/ 通用 / 版本更新 / 关于 |
 | `ToastWindow` | 右下角置顶通知（独立窗口，规避 WebView2 原生表面 airspace） |
 
-## 3. 关键流程
+## 4. 关键流程
 
 ### 3.1 启动流程
 
@@ -78,7 +92,7 @@ Program.Main
      ├─ 扫描常见端口（3080/3000/8080/8000）
      │   ├─ 发现其他端口有服务 → 引导页提示切换（不托管）
      │   └─ 未发现 → 按托管模式启动：
-     │       ├─ Npx：npx --yes @deepseek-ai/dsh@latest web --no-open --port X
+     │       ├─ Npx：首次将官方包安装到私有目录并固定版本，随后直接运行 dsh.cmd
      │       ├─ Source：pnpm dsh web / node --import tsx/esm apps/cli/src/bin.ts（pnpm 缺失自动降级）
      │       └─ None：不托管
      ├─ 环境预检（路径/node_modules/pnpm/node）
@@ -107,7 +121,7 @@ mux 流帧（session/event, turn/end, reason.kind=completed）
      └─ SwitchWebUrl：重建事件监控 + 服务管理器 + 重载 WebView（即时生效，无需重启）
 ```
 
-## 4. DSH 官方协议（客户端直接消费）
+## 5. DSH 官方协议（客户端直接消费）
 
 - **HTTP RPC**：`POST /api/<method>`，请求 `{type:'client-request', rpcId, method, payload}`，
   响应 `{type:'server-response', rpcId, result:{ok, value|error}}`
@@ -120,8 +134,15 @@ mux 流帧（session/event, turn/end, reason.kind=completed）
   - `session.history` → 会话事件（回复文本在最后 `assistant/message` 的 `data.message.content[].text`）
   - `host.describe` → `version`（运行版本）
   - `session.create` / `session.prompt` → 建会话/发消息
+  - `session.cancel` → 协作式停止指定会话当前轮次
 
-## 5. 多连接演进（阶段 2/3）
+## 6. 设置、命令与插件
+
+设置页固定为连接、插件、偏好设置、关于与更新四个一级页面。连接页承担服务状态、配置列表和配置详情；插件页展示并管理随客户端安装的 DSH 增强插件；偏好设置只包含客户端行为；关于与更新区分客户端更新和官方包更新，源码模式不提供源码版本管理。
+
+客户端只提供宿主能力（窗口、生命周期、连接、插件安装和权限）；业务功能下沉到按领域拆分的 DSH 插件。当前内置 `dsh-sharp-session` 会话域插件在 DSH WebUI 网页上下文处理 Esc、右键复制会话 ID，并承载会话完成通知、通知中心和会话跳转，通过公开 `sessions` 服务识别会话并调用 `session.cancel()`。工作区右键打开资源管理器复用 DSH 官方 `workspaces.openPath(path)`，底层通过 `host.openPath` 做 Windows、macOS 和 Linux 平台适配；插件只贡献菜单界面。官方包托管模式在私有运行目录内固定安装 `pnpm`，并用 DSH 官方 `plugin` 命令幂等链接随客户端发布的插件；源码、纯探测和远程环境不由客户端写入插件配置。
+
+## 7. 多连接演进
 
 - 设计上连接（地址+监控+托管+会话列表）已可实例化多次；
 - 阶段 2：TabControl 多标签，标签休眠控制 WebView 内存；
