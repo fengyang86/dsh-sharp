@@ -1,5 +1,6 @@
 /** 插件所需的最小会话服务接口，保持与 DSH 公共 sessions 外观一致。 */
 export interface ShortcutSessions {
+  open(id: string): void
   readonly list: {
     getSnapshot(): {
       readonly current: string | undefined
@@ -11,6 +12,20 @@ export interface ShortcutSessions {
       cancel(): Promise<{ readonly ok: boolean; readonly error?: { readonly message?: string } }>
     }
   } | undefined
+}
+
+/** 处理桌面托盘传入的会话地址，并交给 DSH 官方 sessions.open。 */
+export function installSessionNavigation(sessions: ShortcutSessions): () => void {
+  const openFromHash = (): void => {
+    const match = window.location.hash.match(/(?:^#|&)dsh-session=([^&]+)/)
+    if (match === null) return
+    const id = decodeURIComponent(match[1])
+    sessions.open(id)
+    history.replaceState(null, '', `${window.location.pathname}${window.location.search}`)
+  }
+  window.addEventListener('hashchange', openFromHash)
+  openFromHash()
+  return () => window.removeEventListener('hashchange', openFromHash)
 }
 
 const TRANSIENT_LAYER_SELECTOR = [

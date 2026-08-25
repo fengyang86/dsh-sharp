@@ -128,17 +128,32 @@
                 </StackPanel>
 
                 <!-- ===== 面板：插件 ===== -->
-                <StackPanel IsVisible="{Binding ShowPlugins}" Spacing="12">
+                <StackPanel IsVisible="{Binding ShowPlugins}" Spacing="12" x:CompileBindings="False">
                     <TextBlock Text="插件" FontSize="16" FontWeight="SemiBold"/>
-                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
-                        <StackPanel Spacing="4">
-                            <TextBlock Text="dsh-sharp-session" FontWeight="SemiBold"/>
-                            <TextBlock Text="Esc 停止当前运行会话；会话右键复制会话 ID；工作区右键在系统文件管理器中打开。"
-                                       FontSize="12" TextWrapping="Wrap"
-                                       Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
-                        </StackPanel>
-                        <TextBlock Grid.Column="1" Text="随客户端提供" VerticalAlignment="Center"/>
-                    </Grid>
+                    <TextBlock Text="这里列出当前 DSH profile 已安装的插件。内置插件由客户端维护，第三方插件可停用或卸载；修改后需重启 DSH 服务生效。"
+                               FontSize="12" TextWrapping="Wrap" Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+                    <ItemsControl ItemsSource="{Binding Plugins}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Padding="10" Margin="0,0,0,8" BorderThickness="1" CornerRadius="4"
+                                        BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}">
+                                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                                        <StackPanel Spacing="3">
+                                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold"/>
+                                            <TextBlock Text="{Binding Description}" FontSize="12" TextWrapping="Wrap"/>
+                                            <TextBlock Text="版本 {Binding Version} · {Binding IsActive, StringFormat=激活：{0}}" FontSize="11"/>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                                            <Button Content="切换启用状态" Command="{Binding $parent[ItemsControl].DataContext.TogglePluginCommand}"
+                                                    CommandParameter="{Binding}" IsVisible="{Binding !IsBundled, FallbackValue=True}"/>
+                                            <Button Content="卸载" Command="{Binding $parent[ItemsControl].DataContext.RemovePluginCommand}"
+                                                    CommandParameter="{Binding}" IsVisible="{Binding !IsBundled, FallbackValue=True}"/>
+                                        </StackPanel>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
                 </StackPanel>
 
                 <!-- ===== 面板：通用 ===== -->

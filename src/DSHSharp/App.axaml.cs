@@ -231,7 +231,10 @@ public partial class App : Application
                 StopManagedService,
                 SwitchProfile,
                 CheckDshVersionAsync,
-                UpdateManagedService));
+                UpdateManagedService,
+                () => _serviceManager?.ListProfilePlugins() ?? [],
+                async (name, active) => _serviceManager is not null && await _serviceManager.SetPluginActiveAsync(name, active),
+                async name => _serviceManager is not null && await _serviceManager.RemovePluginAsync(name)));
             _settingsWindow.Closed += (_, _) => _settingsWindow = null;
             _settingsWindow.Show();
         });
@@ -404,10 +407,17 @@ public partial class App : Application
                 }
 
                 var item = new NativeMenuItem((session.Running ? "● " : "") + title);
-                item.Click += (_, _) => SafePost("tray:session", ActivateMainWindow);
+                var sessionId = session.SessionId;
+                item.Click += (_, _) => SafePost("tray:session", () => NavigateToSession(sessionId));
                 menu.Items.Add(item);
             }
         });
+    }
+
+    private void NavigateToSession(string sessionId)
+    {
+        ActivateMainWindow();
+        _mainWindow?.NavigateToSession(sessionId);
     }
 
     /// <summary>托盘"关于"：弹出版本信息 Toast。</summary>

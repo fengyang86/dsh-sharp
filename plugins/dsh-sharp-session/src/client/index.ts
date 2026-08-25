@@ -1,4 +1,4 @@
-import { installSessionShortcuts, type ShortcutSessions } from './shortcut.ts'
+import { installSessionNavigation, installSessionShortcuts, type ShortcutSessions } from './shortcut.ts'
 import { ContextMenuView } from './ContextMenuView.tsx'
 import { createMenuStore } from './menu-store.ts'
 
@@ -21,6 +21,10 @@ export function apply(ctx: ShortcutContext): void {
   ctx.effect(
     () => installSessionShortcuts(ctx.sessions),
     'dsh-sharp-session: document keyboard listener',
+  )
+  ctx.effect(
+    () => installSessionNavigation(ctx.sessions),
+    'dsh-sharp-session: tray session navigation',
   )
   ctx.slots.inject('shell.overlay', () => ctx.slots.register(
     {

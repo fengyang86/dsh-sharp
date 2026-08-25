@@ -96,6 +96,17 @@ public partial class ServiceProfileItem : ViewModelBase
 
 public partial class SettingsViewModel : ViewModelBase
 {
+    public sealed partial class PluginItem : ObservableObject
+    {
+        public PluginItem(string name, string? version, bool isBundled, bool isActive, string? description)
+        { Name = name; Version = version ?? "未知版本"; IsBundled = isBundled; IsActive = isActive; Description = description ?? ""; }
+        public string Name { get; }
+        public string Version { get; }
+        public bool IsBundled { get; }
+        public string Description { get; }
+        [ObservableProperty] private bool _isActive;
+    }
+
     private readonly AppSettings _settings;
     private readonly Action<AppSettings> _save;
     private readonly Action _startService;
@@ -103,6 +114,9 @@ public partial class SettingsViewModel : ViewModelBase
     private readonly Action<string> _switchProfile;
     private readonly Func<Task<string>> _checkVersion;
     private readonly Action _updateService;
+    private readonly Func<IReadOnlyList<DSHSharp.Core.Dsh.DshServiceManager.ProfilePlugin>> _listPlugins;
+    private readonly Func<string, bool, Task<bool>> _setPluginActive;
+    private readonly Func<string, Task<bool>> _removePlugin;
 
     public SettingsViewModel(
         AppSettings settings,
@@ -112,7 +126,10 @@ public partial class SettingsViewModel : ViewModelBase
         Action stopService,
         Action<string> switchProfile,
         Func<Task<string>>? checkVersion = null,
-        Action? updateService = null)
+        Action? updateService = null,
+        Func<IReadOnlyList<DSHSharp.Core.Dsh.DshServiceManager.ProfilePlugin>>? listPlugins = null,
+        Func<string, bool, Task<bool>>? setPluginActive = null,
+        Func<string, Task<bool>>? removePlugin = null)
     {
         ArgumentNullException.ThrowIfNull(settings);
         _settings = settings;
@@ -122,6 +139,10 @@ public partial class SettingsViewModel : ViewModelBase
         _switchProfile = switchProfile;
         _checkVersion = checkVersion ?? (() => Task.FromResult("版本检查不可用"));
         _updateService = updateService ?? (() => { });
+        _listPlugins = listPlugins ?? (() => []);
+        _setPluginActive = setPluginActive ?? ((_, _) => Task.FromResult(false));
+        _removePlugin = removePlugin ?? (_ => Task.FromResult(false));
+        RefreshPlugins();
 
         ServiceStatusText = serviceStatusText;
         AutoStartEnabled = settings.AutoStartEnabled;
@@ -355,6 +376,33 @@ public partial class SettingsViewModel : ViewModelBase
 
     [RelayCommand]
     private void UpdateService() => _updateService();
+
+    public ObservableCollection<PluginItem> Plugins { get; } = [];
+
+    private void RefreshPlugins()
+    {
+        Plugins.Clear();
+        foreach (var plugin in _listPlugins())
+        {
+            Plugins.Add(new PluginItem(plugin.Name, plugin.Version ?? "未知版本", plugin.IsBundled,
+                plugin.IsActive, plugin.IsBundled ? "DSH-Sharp 内置插件，由客户端维护" : "当前 DSH profile 中的第三方插件"));
+        }
+    }
+
+    [RelayCommand]
+    private async Task TogglePlugin(PluginItem? plugin)
+    {
+        if (plugin is null || plugin.IsBundled) return;
+        var target = !plugin.IsActive;
+        if (await _setPluginActive(plugin.Name, target)) plugin.IsActive = target;
+    }
+
+    [RelayCommand]
+    private async Task RemovePlugin(PluginItem? plugin)
+    {
+        if (plugin is null || plugin.IsBundled) return;
+        if (await _removePlugin(plugin.Name)) Plugins.Remove(plugin);
+    }
 
     // ---- 服务操作（状态卡片） ----
 

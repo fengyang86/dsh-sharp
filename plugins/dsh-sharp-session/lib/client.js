@@ -9,6 +9,19 @@ window.__ModuleLoader__.load({
 		let react_jsx_runtime = require("react/jsx-runtime");
 		let _deepseek_ai_dsh_client_runtime_client = require("@deepseek-ai/dsh-client-runtime/client");
 		//#region src/client/shortcut.ts
+		/** 处理桌面托盘传入的会话地址，并交给 DSH 官方 sessions.open。 */
+		function installSessionNavigation(sessions) {
+			const openFromHash = () => {
+				const match = window.location.hash.match(/(?:^#|&)dsh-session=([^&]+)/);
+				if (match === null) return;
+				const id = decodeURIComponent(match[1]);
+				sessions.open(id);
+				history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
+			};
+			window.addEventListener("hashchange", openFromHash);
+			openFromHash();
+			return () => window.removeEventListener("hashchange", openFromHash);
+		}
 		const TRANSIENT_LAYER_SELECTOR = [
 			"[aria-modal=\"true\"]",
 			"[role=\"dialog\"]",
@@ -167,6 +180,7 @@ window.__ModuleLoader__.load({
 		*/
 		function apply(ctx) {
 			ctx.effect(() => installSessionShortcuts(ctx.sessions), "dsh-sharp-session: document keyboard listener");
+			ctx.effect(() => installSessionNavigation(ctx.sessions), "dsh-sharp-session: tray session navigation");
 			ctx.slots.inject("shell.overlay", () => ctx.slots.register({
 				name: "shell.overlay",
 				id: "dsh-sharp-session.context-menu",

@@ -97,6 +97,13 @@ public partial class MainWindow : Window
     /// <summary>重载 WebView 到新地址（服务地址切换）。</summary>
     public void ReloadWeb(string url) => Web.Source = new Uri(url);
 
+    /// <summary>通过会话插件接收托盘传入的会话 ID。</summary>
+    public void NavigateToSession(string sessionId)
+    {
+        var baseUrl = App.Instance?.Settings.WebUrl ?? _settings.WebUrl;
+        Web.Source = new Uri($"{baseUrl.TrimEnd('/')}/#dsh-session={Uri.EscapeDataString(sessionId)}");
+    }
+
     /// <summary>显示端口纠错提示：发现其他端口有服务时建议切换。</summary>
     public void ShowPortHint(int port, Action<int> onSwitch)
     {

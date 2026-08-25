@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace DSHSharp.Core.Dsh;
 
@@ -29,6 +30,7 @@ public enum ManagedMode
 /// </summary>
 public sealed class DshServiceManager : IDisposable
 {
+    public sealed record ProfilePlugin(string Name, string? Version, bool IsBundled, bool IsActive, string? Description);
     private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan NpxReadyTimeout = TimeSpan.FromSeconds(120);
     private static readonly TimeSpan SourceReadyTimeout = TimeSpan.FromSeconds(180); // tsx 冷启动实测 90-150s
@@ -74,6 +76,41 @@ public sealed class DshServiceManager : IDisposable
 
     /// <summary>私有 npm 包当前安装的版本；未安装或元数据损坏时返回 null。</summary>
     public string? InstalledPackageVersion => ReadInstalledPackageVersion();
+
+    /// <summary>读取当前 web profile 中已安装的插件及激活状态。</summary>
+    public IReadOnlyList<ProfilePlugin> ListProfilePlugins()
+    {
+        var path = GetWebProfileManifestPath();
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(path));
+            var root = doc.RootElement;
+            var deps = root.TryGetProperty("dependencies", out var dependencies)
+                ? dependencies.EnumerateObject().ToDictionary(x => x.Name, x => x.Value.GetString() ?? "")
+                : new Dictionary<string, string>();
+            var active = root.TryGetProperty("dsh", out var dsh) && dsh.TryGetProperty("profile", out var profile) &&
+                         profile.TryGetProperty("bundles", out var bundles)
+                ? bundles.EnumerateArray().Select(x => x.GetString()).OfType<string>().ToHashSet(StringComparer.Ordinal)
+                : new HashSet<string>(StringComparer.Ordinal);
+            return deps.Select(x => new ProfilePlugin(
+                x.Key,
+                ReadPluginVersion(path, x.Key),
+                string.Equals(x.Key, "@yangfeng/dsh-sharp-session", StringComparison.Ordinal),
+                active.Contains(x.Key),
+                null)).ToArray();
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
+        {
+            Log?.Invoke($"plugin inventory failed: {ex.Message}");
+            return [];
+        }
+    }
+
+    public Task<bool> SetPluginActiveAsync(string name, bool active, CancellationToken ct = default)
+        => RunProfilePackageEditAsync(name, active ? "activate" : "deactivate", ct);
+
+    public Task<bool> RemovePluginAsync(string name, CancellationToken ct = default)
+        => RunProfilePackageEditAsync(name, "remove", ct);
 
     /// <summary>托管进程意外退出时触发（服务崩溃）。</summary>
     public event EventHandler? ProcessExitedUnexpectedly;
@@ -569,6 +606,76 @@ public sealed class DshServiceManager : IDisposable
         }
 
         return Path.Combine(dshHome, "profiles", "web", "package.json");
+    }
+
+    private static string? ReadPluginVersion(string profileManifest, string name)
+    {
+        var packagePath = Path.Combine(Path.GetDirectoryName(profileManifest) ?? string.Empty, "node_modules", name, "package.json");
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(packagePath));
+            return doc.RootElement.TryGetProperty("version", out var version) ? version.GetString() : null;
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    private async Task<bool> RunProfilePackageEditAsync(string name, string action, CancellationToken ct)
+    {
+        var profileManifest = GetWebProfileManifestPath();
+        if (!File.Exists(profileManifest) || string.Equals(name, "@yangfeng/dsh-sharp-session", StringComparison.Ordinal))
+        {
+            LastError = "内置插件由客户端管理，不能停用或卸载";
+            return false;
+        }
+
+        if (action is "activate" or "deactivate")
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(File.ReadAllText(profileManifest));
+                var root = JsonNode.Parse(document.RootElement.GetRawText())?.AsObject() ?? new JsonObject();
+                var dsh = root["dsh"]?.AsObject() ?? new JsonObject();
+                var profile = dsh["profile"]?.AsObject() ?? new JsonObject();
+                var bundles = profile["bundles"]?.AsArray() ?? [];
+                var exists = bundles.Any(x => string.Equals(x?.GetValue<string>(), name, StringComparison.Ordinal));
+                if (action == "activate" && !exists) bundles.Add(name);
+                if (action == "deactivate")
+                {
+                    for (var i = bundles.Count - 1; i >= 0; i--)
+                        if (string.Equals(bundles[i]?.GetValue<string>(), name, StringComparison.Ordinal)) bundles.RemoveAt(i);
+                }
+                profile["bundles"] = bundles; dsh["profile"] = profile; root["dsh"] = dsh;
+                await File.WriteAllTextAsync(profileManifest, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), ct);
+                return true;
+            }
+            catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException or InvalidOperationException)
+            {
+                LastError = $"插件状态保存失败：{ex.Message}";
+                return false;
+            }
+        }
+
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "node", WorkingDirectory = Path.GetDirectoryName(profileManifest), UseShellExecute = false,
+            CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true,
+        };
+        startInfo.ArgumentList.Add(PrivateDshEntryPath); startInfo.ArgumentList.Add("plugin");
+        startInfo.ArgumentList.Add("--profile"); startInfo.ArgumentList.Add("web"); startInfo.ArgumentList.Add("remove"); startInfo.ArgumentList.Add(name);
+        try
+        {
+            using var process = Process.Start(startInfo);
+            if (process is null) return false;
+            PumpOutput(process); await process.WaitForExitAsync(ct);
+            return process.ExitCode == 0;
+        }
+        catch (Exception ex) when (ex is IOException or System.ComponentModel.Win32Exception)
+        {
+            LastError = $"插件卸载失败：{ex.Message}"; return false;
+        }
     }
 
     /// <summary>判断 web 配置中的插件依赖是否已指向当前内置目录。</summary>
