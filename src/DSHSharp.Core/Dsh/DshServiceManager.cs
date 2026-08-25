@@ -657,8 +657,6 @@ public sealed class DshServiceManager : IDisposable
         startInfo.ArgumentList.Add(PrivatePnpmEntryPath);
         startInfo.ArgumentList.Add("add");
         startInfo.ArgumentList.Add("--save-exact");
-        // latest 标签可能被 pnpm 元数据缓存滞留；首次安装和显式更新应优先向 registry 复核。
-        startInfo.ArgumentList.Add("--prefer-online");
         startInfo.ArgumentList.Add($"{ManagedPackageName}@{targetVersion ?? "latest"}");
         return startInfo;
     }
