@@ -12,11 +12,11 @@ window.__ModuleLoader__.load({
 		/** 处理桌面托盘传入的会话地址，并交给 DSH 官方 sessions.open。 */
 		function installSessionNavigation(sessions) {
 			const openFromHash = () => {
-				const match = window.location.hash.match(/(?:^#|&)dsh-session=([^&]+)/);
+				const match = window.location.hash.match(/(?:^#|&)dsh-session=([^&]+)/) ?? window.location.search.match(/[?&]dsh-session=([^&]+)/);
 				if (match === null) return;
 				const id = decodeURIComponent(match[1]);
 				sessions.open(id);
-				history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
+				history.replaceState(null, "", window.location.pathname);
 			};
 			window.addEventListener("hashchange", openFromHash);
 			openFromHash();

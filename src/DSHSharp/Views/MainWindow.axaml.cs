@@ -101,7 +101,7 @@ public partial class MainWindow : Window
     public void NavigateToSession(string sessionId)
     {
         var baseUrl = App.Instance?.Settings.WebUrl ?? _settings.WebUrl;
-        Web.Source = new Uri($"{baseUrl.TrimEnd('/')}/#dsh-session={Uri.EscapeDataString(sessionId)}");
+        Web.Source = new Uri($"{baseUrl.TrimEnd('/')}/?dsh-session={Uri.EscapeDataString(sessionId)}");
     }
 
     /// <summary>显示端口纠错提示：发现其他端口有服务时建议切换。</summary>

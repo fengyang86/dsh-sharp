@@ -393,7 +393,8 @@ public partial class SettingsViewModel : ViewModelBase
     private async Task TogglePlugin(PluginItem? plugin)
     {
         if (plugin is null || plugin.IsBundled) return;
-        var target = !plugin.IsActive;
+        // ToggleSwitch 先更新绑定值，再执行命令；当前值就是用户要求的目标状态。
+        var target = plugin.IsActive;
         if (await _setPluginActive(plugin.Name, target)) plugin.IsActive = target;
     }
 
