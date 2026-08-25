@@ -36,7 +36,7 @@ public sealed class DshApiClient
         return DshRpcParser.ParseLastAssistantText(json);
     }
 
-    /// <summary>获取当前运行服务的 DSH 版本（host.describe → value.version）。</summary>
+    /// <summary>获取服务实例声明的版本（host.describe → value.version），不等同于 DSH npm 包版本。</summary>
     public async Task<string?> GetVersionAsync(CancellationToken ct = default)
     {
         var json = await PostRpcAsync("host.describe", new { }, ct);

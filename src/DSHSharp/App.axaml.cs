@@ -646,38 +646,32 @@ public partial class App : Application
     public async Task<string> CheckDshVersionAsync()
     {
         var api = _apiClient ?? new DshApiClient(Settings.WebUrl);
-        string? current;
-        try
-        {
-            current = await api.GetVersionAsync();
-        }
-        catch (Exception ex)
-        {
-            return $"版本检查失败：{ex.Message}";
-        }
-
-        current ??= "未知";
         try
         {
             var installed = _serviceManager?.InstalledPackageVersion;
             if (string.Equals(Settings.ManagedMode, "Source", StringComparison.OrdinalIgnoreCase))
             {
-                return $"DSH-Sharp：{DshSharpCompatibility.ProductVersion}\nDSH 运行版本：{current}\n支持范围：{DshSharpCompatibility.SupportedRange}\n源码模式：版本由开发者管理";
+                return $"DSH-Sharp：{DshSharpCompatibility.ProductVersion}\n支持范围：{DshSharpCompatibility.SupportedRange}\n源码模式：版本、依赖和构建由开发者管理";
+            }
+
+            if (!string.Equals(Settings.ManagedMode, "Npx", StringComparison.OrdinalIgnoreCase))
+            {
+                return $"DSH-Sharp：{DshSharpCompatibility.ProductVersion}\n支持范围：{DshSharpCompatibility.SupportedRange}\n当前模式不管理 DSH 安装版本";
             }
 
             var latest = await api.GetNpmLatestVersionAsync();
             if (latest is null)
             {
-                return $"DSH-Sharp：{DshSharpCompatibility.ProductVersion}\nDSH 运行版本：{current}\n私有安装版本：{installed ?? "未安装"}\n支持范围：{DshSharpCompatibility.SupportedRange}\nnpm 最新版本：查询失败";
+                return $"DSH-Sharp：{DshSharpCompatibility.ProductVersion}\nDSH 私有运行版本：{installed ?? "未安装"}\n支持范围：{DshSharpCompatibility.SupportedRange}\nnpm 最新版本：查询失败";
             }
-            var status = !DshSharpCompatibility.IsCompatible(current) ? "当前运行版本不兼容，请先升级客户端" :
+            var status = !DshSharpCompatibility.IsCompatible(installed) ? "私有安装版本不兼容或无法识别，请先升级客户端" :
                 !DshSharpCompatibility.IsCompatible(latest) ? "npm 最新版本超出当前客户端支持范围" :
-                current == latest ? "已是最新" : "有兼容更新";
-            return $"DSH-Sharp：{DshSharpCompatibility.ProductVersion}\nDSH 运行版本：{current}\n私有安装版本：{installed ?? "未安装"}\nnpm 最新版本：{latest}\n支持范围：{DshSharpCompatibility.SupportedRange}\n兼容状态：{status}";
+                installed == latest ? "已是最新" : "有兼容更新";
+            return $"DSH-Sharp：{DshSharpCompatibility.ProductVersion}\nDSH 私有运行版本：{installed ?? "未安装"}\nnpm 最新版本：{latest}\n支持范围：{DshSharpCompatibility.SupportedRange}\n兼容状态：{status}";
         }
         catch (Exception ex)
         {
-            return $"运行版本：{current}（更新检查失败：{ex.Message}）";
+            return $"DSH 私有运行版本：{_serviceManager?.InstalledPackageVersion ?? "未安装"}\n更新检查失败：{ex.Message}";
         }
     }
 
