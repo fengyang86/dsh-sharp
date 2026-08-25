@@ -31,6 +31,23 @@ public sealed class DshRpcParserTests
     }
 
     [Fact]
+    public void Filters_ArchivedSessions()
+    {
+        const string json = """
+            {"result":{"ok":true,"value":{"items":[
+              {"sessionId":"active","updatedAt":2,"archived":false},
+              {"sessionId":"old","updatedAt":3,"archived":true},
+              {"sessionId":"status-old","updatedAt":1,"status":"archived"}
+            ]}}}
+            """;
+
+        var sessions = DshRpcParser.ParseSessionList(json);
+
+        var item = Assert.Single(sessions);
+        Assert.Equal("active", item.SessionId);
+    }
+
+    [Fact]
     public void Parses_SessionList_Empty()
     {
         const string json = """

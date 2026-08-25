@@ -4,7 +4,7 @@ using System.Text.Json;
 namespace DSHSharp.Core.Dsh;
 
 /// <summary>会话列表项摘要。</summary>
-public sealed record DshSessionSummary(string SessionId, string? Title, bool Running, long UpdatedAt);
+public sealed record DshSessionSummary(string SessionId, string? Title, bool Running, long UpdatedAt, bool Archived = false);
 
 /// <summary>
 /// DSH HTTP RPC 客户端：按官方协议调用 <c>POST /api/&lt;method&gt;</c>，
@@ -121,7 +121,21 @@ public static class DshRpcParser
                 var updatedAt = item.TryGetProperty("updatedAt", out var updatedEl)
                     ? updatedEl.GetInt64()
                     : 0L;
-                result.Add(new DshSessionSummary(sessionId, title, running, updatedAt));
+                var archived = item.TryGetProperty("archived", out var archivedEl) && archivedEl.ValueKind == JsonValueKind.True;
+                if (!archived && item.TryGetProperty("status", out var statusEl) &&
+                    string.Equals(statusEl.GetString(), "archived", StringComparison.OrdinalIgnoreCase))
+                {
+                    archived = true;
+                }
+                if (!archived && item.TryGetProperty("projections", out var itemProjections) &&
+                    itemProjections.TryGetProperty("values", out var itemValues) &&
+                    itemValues.TryGetProperty("sessionListMetadata", out var metadata) &&
+                    metadata.TryGetProperty("archived", out var metadataArchived) &&
+                    metadataArchived.ValueKind == JsonValueKind.True)
+                {
+                    archived = true;
+                }
+                result.Add(new DshSessionSummary(sessionId, title, running, updatedAt, archived));
             }
         }
         catch (JsonException)
@@ -130,6 +144,7 @@ public static class DshRpcParser
         }
 
         return result
+            .Where(s => !s.Archived)
             .OrderByDescending(s => s.UpdatedAt)
             .ToList();
     }
