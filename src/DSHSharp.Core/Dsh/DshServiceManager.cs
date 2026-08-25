@@ -149,6 +149,14 @@ public sealed class DshServiceManager : IDisposable
 
             if (await IsOnlineAsync(ct))
             {
+                // 服务可能由上一次客户端实例留下；即使无需重新托管，也要先完成内置插件迁移。
+                var bundledManifest = Path.Combine(_bundledShortcutPluginDirectory, "package.json");
+                if (_mode == ManagedMode.Npx && File.Exists(bundledManifest) &&
+                    !await EnsureBundledPluginsAsync(ct))
+                {
+                    return false;
+                }
+
                 Log?.Invoke("service already online, skip managed start");
                 LastError = null;
                 return true;
