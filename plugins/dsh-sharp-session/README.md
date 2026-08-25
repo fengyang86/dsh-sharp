@@ -1,6 +1,8 @@
 # dsh-sharp-session
 
-DSH-Sharp 会话域插件。快捷键、会话完成通知和会话跳转统一运行在网页上下文，不依赖 DSH-Sharp、Avalonia、WebView2 或平台键盘消息。
+DSH-Sharp 会话域插件。快捷键和会话/工作区右键动作运行在网页上下文，不依赖 Avalonia、WebView2 或平台键盘消息。
+
+会话完成通知、提示音和桌面窗口唤起属于 DSH-Sharp 客户端，不属于本插件。
 
 ## 当前快捷键
 

@@ -133,7 +133,7 @@
                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
                         <StackPanel Spacing="4">
                             <TextBlock Text="dsh-sharp-session" FontWeight="SemiBold"/>
-                            <TextBlock Text="Esc 停止当前运行会话；对话框和菜单优先处理 Esc。"
+                            <TextBlock Text="Esc 停止当前运行会话；会话右键复制会话 ID；工作区右键在系统文件管理器中打开。"
                                        FontSize="12" TextWrapping="Wrap"
                                        Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
                         </StackPanel>
@@ -159,14 +159,20 @@
                 <!-- ===== 面板：关于 ===== -->
                 <StackPanel IsVisible="{Binding ShowAbout}" Spacing="10">
                     <TextBlock Text="关于与更新" FontSize="16" FontWeight="SemiBold"/>
+                    <TextBlock Text="DSH-Sharp 客户端" FontSize="14" FontWeight="SemiBold" Margin="0,6,0,0"/>
                     <TextBlock Text="{Binding AboutText}" FontSize="13" LineHeight="22" TextWrapping="Wrap"/>
-                    <TextBlock Text="客户端版本、DSH 运行版本和 npm 可用版本彼此独立；更新只会安装当前客户端支持范围内的 DSH 版本。"
+                    <TextBlock Text="客户端更新：当前版本仅显示信息，不自动下载或安装客户端更新。"
+                               FontSize="12" TextWrapping="Wrap" LineHeight="18"
+                               Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+                    <Separator Margin="0,4"/>
+                    <TextBlock Text="DSH 服务" FontSize="14" FontWeight="SemiBold"/>
+                    <TextBlock Text="DSH 由独立 npm 包发布。仅 Npx 模式管理私有安装版本；源码、远程和纯探测模式不由客户端更新。"
                                FontSize="12" TextWrapping="Wrap" LineHeight="18"
                                Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
                     <TextBlock Text="{Binding VersionInfoText}" FontSize="12" TextWrapping="Wrap" LineHeight="18"/>
                     <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Button Content="检查版本与兼容性" Padding="14,5" Command="{Binding CheckUpdateCommand}"/>
-                        <Button Content="更新兼容 DSH" Padding="14,5" Command="{Binding UpdateServiceCommand}"
+                        <Button Content="检查 DSH 版本" Padding="14,5" Command="{Binding CheckUpdateCommand}"/>
+                        <Button Content="更新 DSH 服务" Padding="14,5" Command="{Binding UpdateServiceCommand}"
                                 IsEnabled="{Binding CanUpdateOfficialPackage}"/>
                     </StackPanel>
                 </StackPanel>

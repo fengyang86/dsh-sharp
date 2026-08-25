@@ -140,7 +140,7 @@ mux 流帧（session/event, turn/end, reason.kind=completed）
 
 设置页固定为连接、插件、偏好设置、关于与更新四个一级页面。连接页承担服务状态、配置列表和配置详情；插件页展示并管理随客户端安装的 DSH 增强插件；偏好设置只包含客户端行为；关于与更新区分客户端更新和官方包更新，源码模式不提供源码版本管理。
 
-客户端只提供宿主能力（窗口、生命周期、连接、插件安装和权限）；业务功能下沉到按领域拆分的 DSH 插件。当前内置 `dsh-sharp-session` 会话域插件在 DSH WebUI 网页上下文处理 Esc、右键复制会话 ID，并承载会话完成通知、通知中心和会话跳转，通过公开 `sessions` 服务识别会话并调用 `session.cancel()`。工作区右键打开资源管理器复用 DSH 官方 `workspaces.openPath(path)`，底层通过 `host.openPath` 做 Windows、macOS 和 Linux 平台适配；插件只贡献菜单界面。官方包托管模式在私有运行目录内固定安装 `pnpm`，并用 DSH 官方 `plugin` 命令幂等链接随客户端发布的插件；源码、纯探测和远程环境不由客户端写入插件配置。
+客户端只提供宿主能力（窗口、生命周期、连接、插件安装和权限）；业务功能下沉到按领域拆分的 DSH 插件。当前内置 `dsh-sharp-session` 会话域插件在 DSH WebUI 网页上下文处理 Esc、右键复制会话 ID，并通过公开 `sessions` 服务调用 `session.cancel()`。工作区右键打开资源管理器复用 DSH 官方 `workspaces.openPath(path)`，底层通过 `host.openPath` 做 Windows、macOS 和 Linux 平台适配；插件只贡献菜单界面。会话完成通知、提示音和桌面窗口唤起由客户端事件监控处理，不属于插件。官方包托管模式在私有运行目录内固定安装 `pnpm`，并用 DSH 官方 `plugin` 命令幂等链接随客户端发布的插件；源码、纯探测和远程环境不由客户端写入插件配置。
 
 ## 7. 多连接演进
 
