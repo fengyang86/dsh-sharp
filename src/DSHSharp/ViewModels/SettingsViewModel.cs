@@ -395,7 +395,14 @@ public partial class SettingsViewModel : ViewModelBase
         if (plugin is null || plugin.IsBundled) return;
         // ToggleSwitch 先更新绑定值，再执行命令；当前值就是用户要求的目标状态。
         var target = plugin.IsActive;
-        if (await _setPluginActive(plugin.Name, target)) plugin.IsActive = target;
+        if (await _setPluginActive(plugin.Name, target))
+        {
+            plugin.IsActive = target;
+            return;
+        }
+
+        // 写入或验证失败时恢复视觉状态，确保设置页不展示未生效的激活结果。
+        plugin.IsActive = !target;
     }
 
     [RelayCommand]

@@ -633,9 +633,17 @@ public sealed class DshServiceManager : IDisposable
 
         if (action is "activate" or "deactivate")
         {
+            if (action == "activate" && TryGetKnownPluginIncompatibility(name, out var incompatibility))
+            {
+                LastError = incompatibility;
+                Log?.Invoke($"plugin activation blocked: {name}; {incompatibility}");
+                return false;
+            }
+
             try
             {
-                using var document = JsonDocument.Parse(File.ReadAllText(profileManifest));
+                var originalManifest = await File.ReadAllTextAsync(profileManifest, ct);
+                using var document = JsonDocument.Parse(originalManifest);
                 var root = JsonNode.Parse(document.RootElement.GetRawText())?.AsObject() ?? new JsonObject();
                 var dsh = root["dsh"]?.AsObject() ?? new JsonObject();
                 var profile = dsh["profile"]?.AsObject() ?? new JsonObject();
@@ -649,6 +657,16 @@ public sealed class DshServiceManager : IDisposable
                 }
                 profile["bundles"] = bundles; dsh["profile"] = profile; root["dsh"] = dsh;
                 await File.WriteAllTextAsync(profileManifest, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), ct);
+
+                if (!await VerifyProfileCompositionAsync(ct))
+                {
+                    await File.WriteAllTextAsync(profileManifest, originalManifest, ct);
+                    LastError = WithLogTail("插件状态未保存：DSH 无法组合此插件配置，已自动恢复原设置");
+                    Log?.Invoke($"plugin configuration rolled back: {name}");
+                    return false;
+                }
+
+                LastError = null;
                 return true;
             }
             catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException or InvalidOperationException)
@@ -676,6 +694,81 @@ public sealed class DshServiceManager : IDisposable
         {
             LastError = $"插件卸载失败：{ex.Message}"; return false;
         }
+    }
+
+    /// <summary>
+    /// 在重启服务前用 DSH 官方配置组合命令验证 profile，失败时调用方可回滚清单。
+    /// 这不能替代第三方插件的完整兼容性测试，但能阻止无效 patch 直接写入激活列表。
+    /// </summary>
+    private async Task<bool> VerifyProfileCompositionAsync(CancellationToken ct)
+    {
+        if (!File.Exists(PrivateDshEntryPath))
+        {
+            LastError = "无法验证插件配置：DSH 私有安装不存在";
+            return false;
+        }
+
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "node",
+            WorkingDirectory = _packageDirectory,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        startInfo.ArgumentList.Add(PrivateDshEntryPath);
+        startInfo.ArgumentList.Add("--profile");
+        startInfo.ArgumentList.Add("web");
+        startInfo.ArgumentList.Add("--dump-config");
+
+        try
+        {
+            using var process = Process.Start(startInfo);
+            if (process is null)
+            {
+                LastError = "无法启动 DSH 插件配置验证";
+                return false;
+            }
+
+            // --dump-config 的正常输出很大，不应写入运行日志；仅在失败时保留诊断。
+            var standardOutput = process.StandardOutput.ReadToEndAsync(ct);
+            var standardError = process.StandardError.ReadToEndAsync(ct);
+            await process.WaitForExitAsync(ct);
+            var error = await standardError;
+            _ = await standardOutput;
+            if (process.ExitCode == 0)
+            {
+                return true;
+            }
+
+            if (!string.IsNullOrWhiteSpace(error))
+            {
+                AppendLog($"plugin configuration validation failed: {error.Trim()}");
+            }
+
+            return false;
+        }
+        catch (Exception ex) when (ex is IOException or System.ComponentModel.Win32Exception)
+        {
+            LastError = $"插件配置验证失败：{ex.Message}";
+            return false;
+        }
+    }
+
+    /// <summary>记录已在当前 DSH 版本实测会阻断 Web 启动的第三方插件。</summary>
+    private bool TryGetKnownPluginIncompatibility(string name, out string message)
+    {
+        if (string.Equals(name, "dsh-routing-suite", StringComparison.Ordinal) &&
+            string.Equals(ReadPluginVersion(GetWebProfileManifestPath(), name), "0.1.2", StringComparison.Ordinal) &&
+            string.Equals(InstalledPackageVersion, "0.1.1-rc.2", StringComparison.Ordinal))
+        {
+            message = "dsh-routing-suite 0.1.2 与当前 DSH 0.1.1-rc.2 不兼容：实测会阻断 Web 客户端启动。请升级该插件或 DSH 后再试。";
+            return true;
+        }
+
+        message = string.Empty;
+        return false;
     }
 
     /// <summary>判断 web 配置中的插件依赖是否已指向当前内置目录。</summary>
