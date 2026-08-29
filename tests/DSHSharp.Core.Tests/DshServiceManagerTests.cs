@@ -62,7 +62,7 @@ public sealed class DshServiceManagerTests : IDisposable
         $"http://127.0.0.1:{((IPEndPoint)_fakeServer.LocalEndpoint).Port}/";
 
     [Fact]
-    public async Task IsOnlineAsync_WhenServerResponds_ReturnsTrue()
+    public async Task IsOnlineAsync_WhenExternalServerResponds_ReturnsFalse()
     {
         using var manager = new DshServiceManager(FakeServerUrl, ManagedMode.None, null, Path.GetTempPath());
 
@@ -77,7 +77,7 @@ public sealed class DshServiceManagerTests : IDisposable
             }
         }
 
-        Assert.True(ok, $"探测应成功（fake server 在线，端口 {((IPEndPoint)_fakeServer.LocalEndpoint).Port}）");
+        Assert.False(ok, "私有 Runtime 管理器不得把外部服务视为自己的在线服务");
     }
 
     [Fact]
@@ -89,14 +89,14 @@ public sealed class DshServiceManagerTests : IDisposable
     }
 
     [Fact]
-    public async Task StartAsync_WhenServiceOnline_ReturnsTrueWithoutSpawning()
+    public async Task StartAsync_WhenExternalServiceIsOnline_DoesNotReuseIt()
     {
-        using var manager = new DshServiceManager(FakeServerUrl, ManagedMode.Npx, null, Path.GetTempPath());
+        // 使用 None 验证外部服务不会改变单一私有 Runtime 的所有权策略。
+        using var privateOnlyManager = new DshServiceManager(FakeServerUrl, ManagedMode.None, null, Path.GetTempPath());
+        var ok = await privateOnlyManager.StartAsync();
 
-        var ok = await manager.StartAsync();
-
-        Assert.True(ok);
-        Assert.False(manager.IsOwned, "服务在线时不应拉起托管进程");
+        Assert.False(ok);
+        Assert.Contains("仅支持私有", privateOnlyManager.LastError);
     }
 
     [Fact]
@@ -107,7 +107,7 @@ public sealed class DshServiceManagerTests : IDisposable
         var ok = await manager.StartAsync();
 
         Assert.False(ok);
-        Assert.Contains("未托管", manager.LastError);
+        Assert.Contains("仅支持私有", manager.LastError);
     }
 
     [Fact]
@@ -123,7 +123,7 @@ public sealed class DshServiceManagerTests : IDisposable
 
         Assert.False(ok);
         Assert.NotNull(manager.LastError);
-        Assert.Contains("不存在", manager.LastError);
+        Assert.Contains("仅支持私有", manager.LastError);
     }
 
     [Fact]
@@ -142,7 +142,7 @@ public sealed class DshServiceManagerTests : IDisposable
             var ok = await manager.StartAsync();
 
             Assert.False(ok);
-            Assert.Contains("package.json", manager.LastError);
+            Assert.Contains("仅支持私有", manager.LastError);
         }
         finally
         {
@@ -167,7 +167,7 @@ public sealed class DshServiceManagerTests : IDisposable
             var ok = await manager.StartAsync();
 
             Assert.False(ok);
-            Assert.Contains("pnpm install", manager.LastError);
+            Assert.Contains("仅支持私有", manager.LastError);
         }
         finally
         {
@@ -192,6 +192,24 @@ public sealed class DshServiceManagerTests : IDisposable
         finally
         {
             Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void DshHomeDirectory_IsPrivateToManagerDirectory()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "dshsharp-home-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var manager = new DshServiceManager("http://127.0.0.1:1/", ManagedMode.Npx, null, directory);
+
+            Assert.Equal(Path.Combine(directory, "dsh-home"), manager.DshHomeDirectory);
+            var legacyHome = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".dsh");
+            Assert.False(string.Equals(legacyHome, manager.DshHomeDirectory, StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
         }
     }
 

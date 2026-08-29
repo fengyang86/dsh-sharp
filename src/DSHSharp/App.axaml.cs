@@ -42,8 +42,6 @@ public partial class App : Application
     private bool _isExiting;
     private bool _serviceOnline;
     private bool _isStarting;
-    private bool _portScanDone;
-    private DateTime _lastAutoStartAttempt = DateTime.MinValue;
 
     /// <summary>当前应用设置。</summary>
     public AppSettings Settings { get; private set; } = new();
@@ -53,6 +51,9 @@ public partial class App : Application
 
     /// <summary>是否托管着本地 DSH 服务进程（客户端拉起的服务）。</summary>
     public bool IsServiceOwned => _serviceManager?.IsOwned ?? false;
+
+    /// <summary>私有 Runtime 在本次运行中实际绑定的本机地址。</summary>
+    public string RuntimeUrl => RuntimeBaseUrl;
 
     public override void Initialize()
     {
@@ -65,9 +66,6 @@ public partial class App : Application
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             Settings = _settingsService.Load();
-            // 多配置：旧版配置迁移出默认 Profile，并同步顶层字段；迁移结果落盘。
-            ProfileHelper.EnsureDefaultProfile(Settings);
-            ProfileHelper.ApplyActiveProfile(Settings);
             _settingsService.Save(Settings);
             // 自启动开关以系统实际状态为准（防止设置与注册表脱节）。
             Settings.AutoStartEnabled = _autoStart.IsEnabled();
@@ -81,7 +79,6 @@ public partial class App : Application
 
             SetupTrayIcon();
             SetupServiceManager();
-            SetupDshMonitor();
 
             if (AutoStartLaunch || Settings.StartMinimized)
             {
@@ -92,6 +89,9 @@ public partial class App : Application
             {
                 _mainWindow.Show();
             }
+
+            // DSH-Sharp 是私有 Runtime 的唯一宿主。服务就绪后才创建 WebView 连接。
+            _ = StartManagedServiceAsync();
         }
 
         base.OnFrameworkInitializationCompleted();
@@ -165,11 +165,8 @@ public partial class App : Application
 
     private void SetupServiceManager()
     {
-        var mode = Enum.TryParse<ManagedMode>(Settings.ManagedMode, ignoreCase: true, out var parsed)
-            ? parsed
-            : ManagedMode.Npx;
         DshServiceManager.Log = Log;
-        _serviceManager = new DshServiceManager(Settings.WebUrl, mode, Settings.SourcePath);
+        _serviceManager = new DshServiceManager(AppSettings.DefaultWebUrl, ManagedMode.Npx, null);
         _serviceManager.ProcessExitedUnexpectedly += (_, _) =>
             SafePost("service:crashed", () =>
             {
@@ -192,6 +189,11 @@ public partial class App : Application
         {
             var ok = await _serviceManager.StartAsync();
             Log($"managed start: ok={ok}, error={_serviceManager.LastError ?? "none"}");
+            if (ok)
+            {
+                _serviceOnline = true;
+                ConnectRuntime();
+            }
         }
         catch (Exception ex)
         {
@@ -209,7 +211,22 @@ public partial class App : Application
     public void StopManagedService()
     {
         _serviceManager?.Stop();
+        _serviceOnline = false;
+        _monitor?.Dispose();
+        _monitor = null;
         UpdateServiceUi();
+    }
+
+    private string RuntimeBaseUrl => _serviceManager?.ActiveBaseUrl ?? AppSettings.DefaultWebUrl;
+
+    /// <summary>Runtime 成功启动后才建立监控和 WebView 导航，避免首屏连接错误。</summary>
+    private void ConnectRuntime()
+    {
+        _monitor?.Dispose();
+        SetupDshMonitor();
+        _apiClient = new DshApiClient(RuntimeBaseUrl);
+        StartSessionRefresh();
+        _mainWindow?.ReloadWeb(RuntimeBaseUrl);
     }
 
     /// <summary>打开设置窗口（已打开则激活）。</summary>
@@ -229,7 +246,6 @@ public partial class App : Application
                 SaveSettings,
                 () => _ = StartManagedServiceAsync(),
                 StopManagedService,
-                SwitchProfile,
                 CheckDshVersionAsync,
                 UpdateManagedService,
                 () => _serviceManager?.ListProfilePlugins() ?? [],
@@ -238,41 +254,6 @@ public partial class App : Application
             _settingsWindow.Closed += (_, _) => _settingsWindow = null;
             _settingsWindow.Show();
         });
-    }
-
-    /// <summary>
-    /// 切换服务配置（Profile）：同步激活与顶层字段、持久化并即时重建连接。
-    /// </summary>
-    public void SwitchProfile(string name)
-    {
-        ProfileHelper.ActivateProfile(Settings, name);
-        ProfileHelper.ApplyActiveProfile(Settings);
-        Log($"switched profile: {name} -> {Settings.WebUrl}");
-        _settingsService.Save(Settings);
-        _mainWindow?.ShowNotification("服务配置已切换", $"{Settings.ActiveProfileName} · {Settings.WebUrl}");
-        SwitchWebUrl(Settings.WebUrl);
-    }
-
-    /// <summary>
-    /// 切换服务地址并即时重建连接（无需重启）：更新设置、重建事件监控与服务托管、
-    /// 重载 WebView。
-    /// </summary>
-    public void SwitchWebUrl(string url)
-    {
-        Log($"switching web url: {Settings.WebUrl} -> {url}");
-        Settings.WebUrl = url;
-        _settingsService.Save(Settings);
-
-        _monitor?.Dispose();
-        _monitor = null;
-        _serviceManager?.Dispose();
-        _serviceManager = null;
-        _portScanDone = false;
-
-        SetupServiceManager();
-        SetupDshMonitor();
-        _mainWindow?.ReloadWeb(url);
-        UpdateServiceUi();
     }
 
     /// <summary>保存设置：即时应用可生效项，持久化，提示重启生效项。</summary>
@@ -295,17 +276,13 @@ public partial class App : Application
             ApplyTheme(updated.Theme);
         }
 
-        var connectionChanged = updated.WebUrl != Settings.WebUrl
-            || !string.Equals(updated.ManagedMode, Settings.ManagedMode, StringComparison.OrdinalIgnoreCase)
-            || updated.SourcePath != Settings.SourcePath;
-
         Settings = updated;
         _settingsService.Save(Settings);
-        Log($"settings saved (connectionChanged={connectionChanged})");
+        Log("settings saved");
 
         _mainWindow?.ShowNotification(
             "设置已保存",
-            connectionChanged ? "服务地址/托管模式将在下次启动时生效。" : "更改已即时生效。");
+            "更改已即时生效。");
     }
 
     private void SetupTrayIcon()
@@ -352,7 +329,6 @@ public partial class App : Application
     /// <summary>启动会话列表定时刷新（60s 间隔，首次 5s 后）。</summary>
     private void StartSessionRefresh()
     {
-        _apiClient = new DshApiClient(Settings.WebUrl);
         _sessionRefreshTimer?.Dispose();
         _sessionRefreshTimer = new Timer(
             _ => _ = RefreshSessionsAsync(),
@@ -445,7 +421,7 @@ public partial class App : Application
         }
     }
 
-    /// <summary>按当前服务状态刷新托盘"本地服务"菜单项（UI 线程调用）。</summary>
+    /// <summary>按当前 Runtime 状态刷新托盘菜单项（UI 线程调用）。</summary>
     private void RefreshTrayMenu()
     {
         if (_trayServiceItem is null || _serviceManager is null)
@@ -455,17 +431,17 @@ public partial class App : Application
 
         if (_serviceManager.IsOwned)
         {
-            _trayServiceItem.Header = "停止本地服务";
+            _trayServiceItem.Header = "停止 DSH Runtime";
             _trayServiceItem.IsEnabled = true;
         }
-        else if (!_serviceOnline && _serviceManager.Mode != ManagedMode.None)
+        else if (!_serviceOnline)
         {
-            _trayServiceItem.Header = "启动本地服务";
+            _trayServiceItem.Header = "启动 DSH Runtime";
             _trayServiceItem.IsEnabled = true;
         }
         else
         {
-            _trayServiceItem.Header = _serviceOnline ? "本地服务：外部运行" : "本地服务：未托管";
+            _trayServiceItem.Header = "DSH Runtime：正在恢复";
             _trayServiceItem.IsEnabled = false;
         }
     }
@@ -532,7 +508,7 @@ public partial class App : Application
     private void SetupDshMonitor()
     {
         DshEventMonitor.Log = Log;
-        _monitor = new DshEventMonitor(Settings.WebUrl);
+        _monitor = new DshEventMonitor(RuntimeBaseUrl);
         _monitor.SessionCompleted += OnSessionCompleted;
         _monitor.ServiceAvailabilityChanged += OnServiceAvailabilityChanged;
         _monitor.Start();
@@ -553,7 +529,7 @@ public partial class App : Application
             string? preview = null;
             try
             {
-                var client = new DshApiClient(Settings.WebUrl);
+                var client = new DshApiClient(RuntimeBaseUrl);
                 title = string.IsNullOrEmpty(e.Title) ? ShortId(e.SessionId) : e.Title;
                 preview = await client.GetLastAssistantTextAsync(e.SessionId);
             }
@@ -608,12 +584,6 @@ public partial class App : Application
             try
             {
                 UpdateServiceUi();
-                // 离线处理：先扫描常见端口纠错，未发现服务才按托管模式自动启动。
-                if (!e.IsOnline && !_portScanDone)
-                {
-                    _portScanDone = true;
-                    _ = HandleOfflineAsync();
-                }
             }
             catch (Exception ex)
             {
@@ -631,14 +601,14 @@ public partial class App : Application
         }
 
         var owned = _serviceManager?.IsOwned ?? false;
-        vm.SetServiceState(_serviceOnline, owned, _isStarting, Settings.WebUrl, Settings.ManagedMode, Settings.ActiveProfileName);
+        vm.SetServiceState(_serviceOnline, owned, _isStarting, RuntimeBaseUrl, "Npx", "私有 Runtime");
 
         // 离线时隐藏 WebView（原生表面会遮挡引导页），在线时恢复。
         _mainWindow.SetWebViewVisible(_serviceOnline);
 
         if (!_serviceOnline)
         {
-            var detail = _serviceManager?.LastError ?? BuildOnboardingDetail();
+            var detail = _isStarting ? "正在准备私有 DSH Runtime…" : _serviceManager?.LastError ?? BuildOnboardingDetail();
             _mainWindow.ShowOnboarding(true, detail, _isStarting || owned);
         }
         else
@@ -655,20 +625,10 @@ public partial class App : Application
     /// </summary>
     public async Task<string> CheckDshVersionAsync()
     {
-        var api = _apiClient ?? new DshApiClient(Settings.WebUrl);
+        var api = _apiClient ?? new DshApiClient(RuntimeBaseUrl);
         try
         {
             var installed = _serviceManager?.InstalledPackageVersion;
-            if (string.Equals(Settings.ManagedMode, "Source", StringComparison.OrdinalIgnoreCase))
-            {
-                return $"DSH-Sharp：{DshSharpCompatibility.ProductVersion}\n支持范围：{DshSharpCompatibility.SupportedRange}\n源码模式：版本、依赖和构建由开发者管理";
-            }
-
-            if (!string.Equals(Settings.ManagedMode, "Npx", StringComparison.OrdinalIgnoreCase))
-            {
-                return $"DSH-Sharp：{DshSharpCompatibility.ProductVersion}\n支持范围：{DshSharpCompatibility.SupportedRange}\n当前模式不管理 DSH 安装版本";
-            }
-
             var latest = await api.GetNpmLatestVersionAsync();
             if (latest is null)
             {
@@ -688,14 +648,6 @@ public partial class App : Application
     /// <summary>更新服务：官方包模式只升级支持范围内的私有包；源码模式由开发者管理。</summary>
     public async void UpdateManagedService()
     {
-        if (string.Equals(Settings.ManagedMode, "Source", StringComparison.OrdinalIgnoreCase))
-        {
-            _mainWindow?.ShowNotification(
-                "源码模式更新",
-                "DSH-Sharp 不管理源码、依赖和构建；请由开发者完成更新后重启服务。");
-            return;
-        }
-
         var manager = _serviceManager;
         if (manager is null)
         {
@@ -706,7 +658,7 @@ public partial class App : Application
         _isStarting = true;
         UpdateServiceUi();
         string? targetVersion = null;
-        try { targetVersion = await (_apiClient ?? new DshApiClient(Settings.WebUrl)).GetNpmLatestVersionAsync(); }
+        try { targetVersion = await (_apiClient ?? new DshApiClient(RuntimeBaseUrl)).GetNpmLatestVersionAsync(); }
         catch { }
         if (!DshSharpCompatibility.IsCompatible(targetVersion))
         {
@@ -724,19 +676,13 @@ public partial class App : Application
             return;
         }
 
-        _portScanDone = false;
         await StartManagedServiceAsync();
     }
 
     /// <summary>设置页显示的当前服务状态卡片文本（地址/模式/状态/错误）。</summary>
     private string BuildServiceStatusText()
     {
-        var modeText = Settings.ManagedMode switch
-        {
-            "None" => "不托管（仅探测）",
-            "Source" => "源码托管（pnpm/node）",
-            _ => "私有目录托管（官方包）",
-        };
+        const string modeText = "私有 Runtime（官方包）";
 
         var status = _serviceManager?.IsOwned ?? false
             ? "托管中（客户端已启动服务）"
@@ -748,7 +694,7 @@ public partial class App : Application
 
         var error = _serviceManager?.LastError;
         var errorLine = string.IsNullOrEmpty(error) ? "" : $"\n最近错误：{error}";
-        return $"● {Settings.WebUrl}\n托管模式：{modeText}\n状态：{status}{errorLine}";
+        return $"● {RuntimeBaseUrl}\n运行时：{modeText}\n数据目录：{_serviceManager?.DshHomeDirectory ?? "未初始化"}\n状态：{status}{errorLine}";
     }
 
     private string BuildOnboardingDetail()
@@ -758,61 +704,7 @@ public partial class App : Application
             return "正在检测本地 DSH 服务…";
         }
 
-        return _serviceManager.Mode switch
-        {
-            ManagedMode.None => "当前为纯探测模式（未托管）。请手动启动 DSH 服务，或在设置中开启托管。",
-            ManagedMode.Source => "将使用配置的源码路径启动 DSH 服务（pnpm dsh web --no-open）。请确认已执行 pnpm install && pnpm run build。",
-            _ => "将从 DSH-Sharp 私有目录启动官方 DSH 包。首次启动需要联网安装，后续直接复用固定版本。",
-        };
-    }
-
-    /// <summary>
-    /// 离线统一处理：先扫描常见端口——
-    /// 发现其他端口有 DSH 服务则提示切换（此时不启动托管，避免双服务并行）；
-    /// 未发现任何服务才按托管模式自动启动（防抖：失败后 60s 冷却）。
-    /// </summary>
-    private async Task HandleOfflineAsync()
-    {
-        var manager = _serviceManager;
-        if (manager is null || _serviceOnline)
-        {
-            return;
-        }
-
-        // 1. 端口纠错扫描。
-        Log("offline: scanning common ports");
-        int? found;
-        try
-        {
-            found = await manager.ScanCommonPortsAsync();
-        }
-        catch (Exception ex)
-        {
-            Log($"port scan failed: {ex.Message}");
-            found = null;
-        }
-
-        Log($"port scan result: {found?.ToString() ?? "none"}");
-        if (found is not null && !_serviceOnline)
-        {
-            // 2. 发现其他端口的服务：提示切换，跳过托管启动。
-            var port = found.Value;
-            Dispatcher.UIThread.Post(() =>
-            {
-                _mainWindow?.ShowPortHint(port, p => SwitchWebUrl($"http://127.0.0.1:{p}"));
-            });
-            return;
-        }
-
-        // 3. 未发现：按托管模式自动启动。
-        if (manager.Mode != ManagedMode.None
-            && !manager.IsOwned
-            && !_isStarting
-            && DateTime.UtcNow - _lastAutoStartAttempt > TimeSpan.FromSeconds(60))
-        {
-            _lastAutoStartAttempt = DateTime.UtcNow;
-            _ = StartManagedServiceAsync();
-        }
+        return "DSH-Sharp 将从私有目录启动官方 DSH Runtime。首次启动需要联网安装，后续直接复用固定版本。";
     }
 
     private static string ShortId(string sessionId) =>

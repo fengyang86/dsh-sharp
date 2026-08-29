@@ -111,7 +111,6 @@ public partial class SettingsViewModel : ViewModelBase
     private readonly Action<AppSettings> _save;
     private readonly Action _startService;
     private readonly Action _stopService;
-    private readonly Action<string> _switchProfile;
     private readonly Func<Task<string>> _checkVersion;
     private readonly Action _updateService;
     private readonly Func<IReadOnlyList<DSHSharp.Core.Dsh.DshServiceManager.ProfilePlugin>> _listPlugins;
@@ -124,7 +123,6 @@ public partial class SettingsViewModel : ViewModelBase
         Action<AppSettings> save,
         Action startService,
         Action stopService,
-        Action<string> switchProfile,
         Func<Task<string>>? checkVersion = null,
         Action? updateService = null,
         Func<IReadOnlyList<DSHSharp.Core.Dsh.DshServiceManager.ProfilePlugin>>? listPlugins = null,
@@ -136,7 +134,6 @@ public partial class SettingsViewModel : ViewModelBase
         _save = save;
         _startService = startService;
         _stopService = stopService;
-        _switchProfile = switchProfile;
         _checkVersion = checkVersion ?? (() => Task.FromResult("版本检查不可用"));
         _updateService = updateService ?? (() => { });
         _listPlugins = listPlugins ?? (() => []);
@@ -166,14 +163,14 @@ public partial class SettingsViewModel : ViewModelBase
 
     // ---- 导航 ----
 
-    public string[] Sections { get; } = ["连接", "插件", "偏好设置", "关于与更新"];
+    public string[] Sections { get; } = ["运行时", "插件", "偏好设置", "版本与更新"];
 
     [ObservableProperty]
-    private string _selectedSection = "连接";
+    private string _selectedSection = "运行时";
 
     partial void OnSelectedSectionChanged(string value)
     {
-        ShowProfiles = value == "连接";
+        ShowProfiles = value == "运行时";
         ShowPlugins = value == "插件";
         ShowGeneral = value == "偏好设置";
         ShowAbout = value == "关于与更新";
@@ -259,7 +256,6 @@ public partial class SettingsViewModel : ViewModelBase
     [RelayCommand]
     private void Save()
     {
-        _settings.Profiles = Profiles.Select(p => p.Profile).ToList();
         _settings.AutoStartEnabled = AutoStartEnabled;
         _settings.CloseToTray = CloseToTray;
         _settings.StartMinimized = StartMinimized;
@@ -267,10 +263,7 @@ public partial class SettingsViewModel : ViewModelBase
         _settings.NotificationSoundEnabled = NotificationSoundEnabled;
         _settings.Theme = Theme;
 
-        ProfileHelper.ApplyActiveProfile(_settings);
         _save(_settings);
-        // 重建连接：激活配置的地址/模式/路径若被修改，立即生效（无需重启）。
-        _switchProfile(_settings.ActiveProfileName);
 
         CloseRequested?.Invoke();
     }
@@ -284,15 +277,7 @@ public partial class SettingsViewModel : ViewModelBase
             return;
         }
 
-        _settings.Profiles = Profiles.Select(p => p.Profile).ToList();
-        _settings.ActiveProfileName = SelectedProfile.Name;
-        foreach (var item in Profiles)
-        {
-            item.IsActive = item == SelectedProfile;
-        }
-
-        _save(_settings);
-        _switchProfile(SelectedProfile.Name);
+        // 历史多连接配置仅供旧 settings.json 兼容读取，不再参与 Runtime 选择。
     }
 
     /// <summary>不保存，直接关闭窗口。</summary>
@@ -371,8 +356,7 @@ public partial class SettingsViewModel : ViewModelBase
 
     private bool CanCheckUpdate() => !IsCheckingUpdate;
 
-    public bool CanUpdateOfficialPackage =>
-        string.Equals(_settings.ManagedMode, "Npx", StringComparison.OrdinalIgnoreCase);
+    public bool CanUpdateOfficialPackage => true;
 
     [RelayCommand]
     private void UpdateService() => _updateService();

@@ -27,8 +27,6 @@ public partial class MainWindow : Window
         var viewModel = new MainWindowViewModel(settings);
         DataContext = viewModel;
 
-        Web.Source = new Uri(_settings.WebUrl);
-
         WindowStateProperty.Changed.AddClassHandler<Window>(OnWindowStateChanged);
         Opened += (_, _) => RestoreWindowState();
         Closing += OnClosing;
@@ -100,32 +98,11 @@ public partial class MainWindow : Window
     /// <summary>通过会话插件接收托盘传入的会话 ID。</summary>
     public void NavigateToSession(string sessionId)
     {
-        var baseUrl = App.Instance?.Settings.WebUrl ?? _settings.WebUrl;
+        var baseUrl = App.Instance?.RuntimeUrl ?? AppSettings.DefaultWebUrl;
         Web.Source = new Uri($"{baseUrl.TrimEnd('/')}/?dsh-session={Uri.EscapeDataString(sessionId)}");
     }
 
-    /// <summary>显示端口纠错提示：发现其他端口有服务时建议切换。</summary>
-    public void ShowPortHint(int port, Action<int> onSwitch)
-    {
-        _portHintPort = port;
-        _portSwitchAction = onSwitch;
-        PortHintText.Text = $"检测到 127.0.0.1:{port} 上有 DSH 服务，但当前配置指向 {App.Instance?.Settings.WebUrl ?? ""}。是否切换到 {port} 端口？";
-        PortHintPanel.IsVisible = true;
-        PortSwitchButton.IsEnabled = true;
-    }
-
-    private Action<int>? _portSwitchAction;
-    private int _portHintPort;
-
-    private void PortSwitchButton_OnClick(object? sender, RoutedEventArgs e)
-    {
-        PortSwitchButton.IsEnabled = false;
-        var action = _portSwitchAction;
-        _portSwitchAction = null;
-        action?.Invoke(_portHintPort);
-    }
-
-    /// <summary>显示/隐藏"未检测到服务"引导页。</summary>
+    /// <summary>显示/隐藏 Runtime 启动与故障页。</summary>
     public void ShowOnboarding(bool show, string? detail, bool busy)
     {
         OnboardingPanel.IsVisible = show;
@@ -138,10 +115,10 @@ public partial class MainWindow : Window
         var owned = app?.IsServiceOwned ?? false;
         StartServiceButton.IsEnabled = !busy;
         StartServiceButton.Content = busy
-            ? "正在启动…"
-            : owned
+                ? "正在启动…"
+                : owned
                 ? "停止本地服务"
-                : "启动本地服务";
+                : "重试启动";
     }
 
     private void StartServiceButton_OnClick(object? sender, RoutedEventArgs e)

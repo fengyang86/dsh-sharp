@@ -45,86 +45,26 @@
         <ScrollViewer>
             <StackPanel Margin="20,16,20,16" Spacing="16">
 
-                <!-- ===== 面板：服务配置 ===== -->
+                <!-- ===== 面板：私有 Runtime ===== -->
                 <StackPanel IsVisible="{Binding ShowProfiles}" Spacing="14">
 
                     <Border Padding="12,10" CornerRadius="6" BorderThickness="1"
                             BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}">
                         <StackPanel Spacing="8">
-                            <TextBlock Text="当前服务状态" FontSize="13" FontWeight="SemiBold"/>
+                            <TextBlock Text="DSH 运行时" FontSize="16" FontWeight="SemiBold"/>
                             <TextBlock Text="{Binding ServiceStatusText}" FontSize="12"
                                        TextWrapping="Wrap" LineHeight="18"/>
+                            <TextBlock Text="DSH-Sharp 只运行并连接私有目录中的官方 DSH Runtime。外部服务和源码部署不会被探测、修改或停止。"
+                                       FontSize="12" TextWrapping="Wrap" LineHeight="18"
+                                       Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
                             <StackPanel Orientation="Horizontal" Spacing="8">
-                                <Button Content="启动本地服务" Padding="12,4" FontSize="12"
+                                <Button Content="重启运行时" Padding="12,4" FontSize="12"
                                         Command="{Binding StartServiceCommand}"/>
-                                <Button Content="停止本地服务" Padding="12,4" FontSize="12"
+                                <Button Content="停止运行时" Padding="12,4" FontSize="12"
                                         Command="{Binding StopServiceCommand}"/>
                             </StackPanel>
                         </StackPanel>
                     </Border>
-
-                    <Grid ColumnDefinitions="240,*" ColumnSpacing="14">
-
-                        <!-- 配置列表 -->
-                        <StackPanel Grid.Column="0" Spacing="8">
-                            <TextBlock Text="服务配置" FontSize="13" FontWeight="SemiBold"/>
-                            <ListBox ItemsSource="{Binding Profiles}" SelectedItem="{Binding SelectedProfile}"
-                                     MinHeight="160" MaxHeight="220">
-                                <ListBox.ItemTemplate>
-                                    <DataTemplate>
-                                        <StackPanel Spacing="2" Margin="4,2">
-                                            <StackPanel Orientation="Horizontal" Spacing="6">
-                                                <TextBlock Text="●" FontSize="10" VerticalAlignment="Center"
-                                                           IsVisible="{Binding IsActive}"/>
-                                                <TextBlock Text="{Binding Name}" FontSize="13"
-                                                           FontWeight="SemiBold"/>
-                                            </StackPanel>
-                                            <TextBlock Text="{Binding Summary}" FontSize="11"
-                                                       Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
-                                        </StackPanel>
-                                    </DataTemplate>
-                                </ListBox.ItemTemplate>
-                            </ListBox>
-                            <WrapPanel>
-                                <Button Content="新增" Padding="10,4" FontSize="12" Margin="0,0,6,6"
-                                        Command="{Binding AddProfileCommand}"/>
-                                <Button Content="复制" Padding="10,4" FontSize="12" Margin="0,0,6,6"
-                                        Command="{Binding DuplicateProfileCommand}"/>
-                                <Button Content="删除" Padding="10,4" FontSize="12" Margin="0,0,6,6"
-                                        Command="{Binding DeleteProfileCommand}"/>
-                                <Button Content="设为当前" Padding="10,4" FontSize="12" Margin="0,0,6,6"
-                                        Command="{Binding SetActiveCommand}"/>
-                            </WrapPanel>
-                        </StackPanel>
-
-                        <!-- 配置详情 -->
-                        <StackPanel Grid.Column="1" Spacing="8"
-                                    x:DataType="vm:ServiceProfileItem"
-                                    DataContext="{Binding SelectedProfile}">
-                            <TextBlock Text="配置详情" FontSize="13" FontWeight="SemiBold"/>
-                            <StackPanel Spacing="5">
-                                <TextBlock Text="名称" FontSize="12"/>
-                                <TextBox Text="{Binding Name}" PlaceholderText="配置名称"/>
-                            </StackPanel>
-                            <StackPanel Spacing="5">
-                                <TextBlock Text="服务地址" FontSize="12"/>
-                                <TextBox Text="{Binding WebUrl}" PlaceholderText="http://127.0.0.1:3080"/>
-                            </StackPanel>
-                            <StackPanel Spacing="5">
-                                <TextBlock Text="托管模式（仅服务离线时生效）" FontSize="12"/>
-                                <ComboBox ItemsSource="{Binding ManagedModes}" SelectedItem="{Binding ManagedMode}"
-                                          HorizontalAlignment="Stretch"/>
-                            </StackPanel>
-                            <StackPanel Spacing="5">
-                                <TextBlock Text="源码路径（Source 模式）" FontSize="12"/>
-                                <TextBox Text="{Binding SourcePath}" PlaceholderText="例如 D:\deepseek-harness"/>
-                            </StackPanel>
-                            <TextBlock Text="服务在线时无论哪种模式都直接使用现有服务；切换配置即时生效，无需重启。"
-                                       FontSize="11" TextWrapping="Wrap"
-                                       Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
-                        </StackPanel>
-
-                    </Grid>
                 </StackPanel>
 
                 <!-- ===== 面板：插件 ===== -->
@@ -175,21 +115,21 @@
 
                 <!-- ===== 面板：关于 ===== -->
                 <StackPanel IsVisible="{Binding ShowAbout}" Spacing="10">
-                    <TextBlock Text="关于与更新" FontSize="16" FontWeight="SemiBold"/>
+                    <TextBlock Text="版本与更新" FontSize="16" FontWeight="SemiBold"/>
                     <TextBlock Text="DSH-Sharp 客户端" FontSize="14" FontWeight="SemiBold" Margin="0,6,0,0"/>
                     <TextBlock Text="{Binding AboutText}" FontSize="13" LineHeight="22" TextWrapping="Wrap"/>
-                    <TextBlock Text="客户端更新：当前版本仅显示信息，不自动下载或安装客户端更新。"
+                    <TextBlock Text="客户端与 DSH Runtime 独立发布。当前客户端仅显示版本信息，不自动下载或安装客户端更新。"
                                FontSize="12" TextWrapping="Wrap" LineHeight="18"
                                Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
                     <Separator Margin="0,4"/>
-                    <TextBlock Text="DSH 服务" FontSize="14" FontWeight="SemiBold"/>
-                    <TextBlock Text="DSH 由独立 npm 包发布。仅 Npx 模式管理私有安装版本；源码、远程和纯探测模式不由客户端更新。"
+                    <TextBlock Text="DSH Runtime" FontSize="14" FontWeight="SemiBold"/>
+                    <TextBlock Text="DSH Runtime 由独立 npm 包发布，安装在 DSH-Sharp 私有目录中。客户端与运行时分别发布和更新；运行时更新不会清除私有会话、插件和设置。"
                                FontSize="12" TextWrapping="Wrap" LineHeight="18"
                                Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
                     <TextBlock Text="{Binding VersionInfoText}" FontSize="12" TextWrapping="Wrap" LineHeight="18"/>
                     <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Button Content="检查 DSH 版本" Padding="14,5" Command="{Binding CheckUpdateCommand}"/>
-                        <Button Content="更新 DSH 服务" Padding="14,5" Command="{Binding UpdateServiceCommand}"
+                        <Button Content="检查 Runtime 版本" Padding="14,5" Command="{Binding CheckUpdateCommand}"/>
+                        <Button Content="更新 Runtime" Padding="14,5" Command="{Binding UpdateServiceCommand}"
                                 IsEnabled="{Binding CanUpdateOfficialPackage}"/>
                     </StackPanel>
                 </StackPanel>

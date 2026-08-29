@@ -106,29 +106,19 @@
             <NativeWebView x:Name="Web"/>
         </Border>
 
-        <!-- ===== 引导页（服务离线时覆盖 WebView） ===== -->
+        <!-- ===== Runtime 启动/故障页（覆盖 WebView） ===== -->
         <Border x:Name="OnboardingPanel" Grid.Row="1" IsVisible="False"
                 Background="{DynamicResource SystemControlBackgroundChromeMediumLowBrush}">
             <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="14" MaxWidth="460"
                         Margin="32">
-                <TextBlock Text="未检测到 DSH 服务" FontSize="20" FontWeight="SemiBold"
+                <TextBlock Text="正在准备 DSH Runtime" FontSize="20" FontWeight="SemiBold"
                            HorizontalAlignment="Center"/>
                 <TextBlock x:Name="OnboardingDetailText" TextWrapping="Wrap" TextAlignment="Center"
                            FontSize="13" Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
-                <Border x:Name="PortHintPanel" IsVisible="False" Padding="12,10" CornerRadius="6"
-                        BorderThickness="1"
-                        BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}">
-                    <StackPanel Spacing="8">
-                        <TextBlock x:Name="PortHintText" TextWrapping="Wrap" TextAlignment="Center"
-                                   FontSize="12"/>
-                        <Button x:Name="PortSwitchButton" Content="切换到该地址" Padding="16,5"
-                                HorizontalAlignment="Center" Click="PortSwitchButton_OnClick"/>
-                    </StackPanel>
-                </Border>
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="8">
-                    <Button x:Name="StartServiceButton" Content="启动本地服务" Padding="16,6"
+                    <Button x:Name="StartServiceButton" Content="重试启动" Padding="16,6"
                             Click="StartServiceButton_OnClick"/>
-                    <Button Content="重新检测" Padding="16,6" Click="RetryProbeButton_OnClick"/>
+                    <Button Content="重新尝试" Padding="16,6" Click="RetryProbeButton_OnClick"/>
                 </StackPanel>
             </StackPanel>
         </Border>

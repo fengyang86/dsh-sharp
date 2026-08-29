@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -38,20 +40,22 @@ public sealed class DshServiceManager : IDisposable
     private const string ManagedPnpmSpec = "pnpm@11.19.0";
 
     private readonly Uri _baseUri;
+    private Uri _activeBaseUri;
     private readonly ManagedMode _mode;
     private readonly string? _sourcePath;
     private readonly string _logPath;
     private readonly string _packageDirectory;
     private readonly string _packageToolsDirectory;
+    private readonly string _dshHomeDirectory;
     private readonly string _bundledShortcutPluginDirectory;
     private readonly SemaphoreSlim _startLock = new(1, 1);
     private Process? _process;
-    private bool _useDirectNode; // 源码模式：pnpm 不可用时用 node + tsx 直接启动
     private bool _disposed;
 
     public DshServiceManager(string baseUrl, ManagedMode mode, string? sourcePath, string? logDirectory = null)
     {
         _baseUri = new Uri(baseUrl.TrimEnd('/') + "/", UriKind.Absolute);
+        _activeBaseUri = _baseUri;
         _mode = mode;
         _sourcePath = sourcePath;
         var dir = logDirectory ?? Path.Combine(
@@ -59,6 +63,7 @@ public sealed class DshServiceManager : IDisposable
         _logPath = Path.Combine(dir, "dsh-service.log");
         _packageDirectory = Path.Combine(dir, "dsh-runtime");
         _packageToolsDirectory = Path.Combine(_packageDirectory, ".tools");
+        _dshHomeDirectory = Path.Combine(dir, "dsh-home");
         _bundledShortcutPluginDirectory = Path.Combine(AppContext.BaseDirectory, "Plugins", "dsh-sharp-session");
     }
 
@@ -67,6 +72,12 @@ public sealed class DshServiceManager : IDisposable
 
     /// <summary>托管模式。</summary>
     public ManagedMode Mode => _mode;
+
+    /// <summary>本次运行实际连接的地址。端口由托管进程成功绑定后确定。</summary>
+    public string ActiveBaseUrl => _activeBaseUri.GetLeftPart(UriPartial.Authority);
+
+    /// <summary>私有 DSH_HOME。会话、profile、插件和凭据不会与外部 DSH 共用。</summary>
+    public string DshHomeDirectory => _dshHomeDirectory;
 
     /// <summary>是否持有托管进程（仅本客户端拉起的服务）。</summary>
     public bool IsOwned => _process is { HasExited: false };
@@ -122,31 +133,12 @@ public sealed class DshServiceManager : IDisposable
     /// 探测服务是否在线（收到任意 HTTP 响应即视为在线）。本地服务不走系统代理。
     /// </summary>
     public async Task<bool> IsOnlineAsync(CancellationToken ct = default)
-        => await ProbeAsync(_baseUri, ct);
+        => IsOwned && await ProbeAsync(_activeBaseUri, ct);
 
     /// <summary>
     /// 扫描常见端口，返回第一个响应 DSH/HTTP 服务的端口；
     /// 未发现返回 null。用于配置地址端口错误时的纠错提示。
     /// </summary>
-    public async Task<int?> ScanCommonPortsAsync(CancellationToken ct = default)
-    {
-        foreach (var port in CommonPorts)
-        {
-            if (port == _baseUri.Port)
-            {
-                continue;
-            }
-
-            var builder = new UriBuilder(_baseUri) { Port = port };
-            if (await ProbeAsync(builder.Uri, ct))
-            {
-                return port;
-            }
-        }
-
-        return null;
-    }
-
     private static async Task<bool> ProbeAsync(Uri uri, CancellationToken ct = default)
     {
         try
@@ -184,89 +176,58 @@ public sealed class DshServiceManager : IDisposable
                 return true;
             }
 
-            if (await IsOnlineAsync(ct))
+            if (_mode != ManagedMode.Npx)
             {
-                // 服务可能由上一次客户端实例留下；即使无需重新托管，也要先完成内置插件迁移。
-                var bundledManifest = Path.Combine(_bundledShortcutPluginDirectory, "package.json");
-                if (_mode == ManagedMode.Npx && File.Exists(bundledManifest) &&
-                    !await EnsureBundledPluginsAsync(ct))
-                {
-                    return false;
-                }
-
-                Log?.Invoke("service already online, skip managed start");
-                LastError = null;
-                return true;
-            }
-
-            if (_mode == ManagedMode.None)
-            {
-                LastError = "服务未托管（托管模式为 None）";
+                LastError = "DSH-Sharp 仅支持私有 DSH Runtime，不连接外部或源码服务";
                 return false;
             }
 
-            if (_mode == ManagedMode.Source)
-            {
-                var issue = await ValidateSourceEnvironmentAsync(ct);
-                if (issue is not null)
-                {
-                    LastError = issue;
-                    return false;
-                }
-            }
-            else if (!await EnsurePrivatePackageAsync(forceUpdate: false, ct) ||
-                     !await EnsureBundledPluginsAsync(ct))
+            Directory.CreateDirectory(_dshHomeDirectory);
+            if (!await EnsurePrivatePackageAsync(forceUpdate: false, ct) ||
+                !await EnsureBundledPluginsAsync(ct))
             {
                 return false;
             }
 
             LastError = null;
-            var psi = BuildStartInfo();
-            Log?.Invoke($"starting managed service: {psi.FileName} {psi.Arguments} (workdir={psi.WorkingDirectory})");
-            AppendLog($"--- DSH service managed start ({_mode}) ---");
-
-            var process = Process.Start(psi);
-            if (process is null)
+            foreach (var port in CandidatePorts())
             {
-                LastError = "进程启动失败";
-                return false;
-            }
-
-            _process = process;
-            process.EnableRaisingEvents = true;
-            process.Exited += OnProcessExited;
-            PumpOutput(process);
-
-            var timeout = _mode == ManagedMode.Npx ? NpxReadyTimeout : SourceReadyTimeout;
-            var deadline = DateTime.UtcNow + timeout;
-            while (DateTime.UtcNow < deadline)
-            {
-                await Task.Delay(TimeSpan.FromSeconds(1), ct);
-                if (process.HasExited)
+                if (!IsPortAvailable(port))
                 {
-                    break;
+                    Log?.Invoke($"managed port unavailable, trying next: {port}");
+                    continue;
                 }
 
-                if (await IsOnlineAsync(ct))
+                _activeBaseUri = new UriBuilder(_baseUri) { Host = "127.0.0.1", Port = port }.Uri;
+                var psi = BuildStartInfo(port);
+                Log?.Invoke($"starting private runtime: {psi.FileName} {psi.Arguments} (port={port})");
+                AppendLog($"--- DSH private runtime start (port={port}) ---");
+                var process = Process.Start(psi);
+                if (process is null)
                 {
-                    Log?.Invoke("managed service ready");
-                    return true;
+                    continue;
                 }
+
+                _process = process;
+                process.EnableRaisingEvents = true;
+                process.Exited += OnProcessExited;
+                PumpOutput(process);
+                var deadline = DateTime.UtcNow + NpxReadyTimeout;
+                while (DateTime.UtcNow < deadline && !process.HasExited)
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(1), ct);
+                    if (await ProbeAsync(_activeBaseUri, ct))
+                    {
+                        Log?.Invoke($"private runtime ready: {ActiveBaseUrl}");
+                        return true;
+                    }
+                }
+
+                KillOwnedProcess();
             }
 
-            if (process.HasExited)
-            {
-                // 进程刚退出时日志可能仍在写入：短暂等待后再读取尾部。
-                await Task.Delay(TimeSpan.FromMilliseconds(500), ct);
-                LastError = WithLogTail($"进程提前退出（退出码 {process.ExitCode}），请检查仓库依赖/构建是否就绪");
-            }
-            else
-            {
-                LastError = WithLogTail($"服务在 {(int)timeout.TotalSeconds}s 内未就绪（首次启动较慢，或端口/配置有问题）");
-            }
-
+            LastError = WithLogTail("私有 DSH Runtime 未能启动：3080 及备用端口均不可用或服务未就绪");
             Log?.Invoke($"managed start failed: {LastError}");
-            KillOwnedProcess();
             return false;
         }
         finally
@@ -350,40 +311,28 @@ public sealed class DshServiceManager : IDisposable
         }
     }
 
-    private ProcessStartInfo BuildStartInfo()
+    private IEnumerable<int> CandidatePorts()
     {
-        // 托管启动的服务端口与客户端探测端口保持一致，确保就绪检测有效。
-        var portArg = _baseUri.IsDefaultPort ? "" : $" --port {_baseUri.Port}";
+        yield return 3080;
+        for (var port = 3081; port <= 3090; port++) yield return port;
+    }
 
-        if (_mode == ManagedMode.Source)
+    private static bool IsPortAvailable(int port)
+    {
+        try
         {
-            // pnpm 可用时用标准方式；否则 node + tsx 直接运行源码 cli。
-            if (_useDirectNode)
-            {
-                return new ProcessStartInfo
-                {
-                    FileName = "node",
-                    Arguments = $"--import tsx/esm apps/cli/src/bin.ts web --no-open{portArg}",
-                    WorkingDirectory = _sourcePath!,
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                };
-            }
-
-            return new ProcessStartInfo
-            {
-                FileName = CommandName("pnpm"),
-                Arguments = $"dsh web --no-open{portArg}",
-                WorkingDirectory = _sourcePath!,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-            };
+            using var listener = new TcpListener(IPAddress.Loopback, port);
+            listener.Start();
+            return true;
         }
+        catch (SocketException)
+        {
+            return false;
+        }
+    }
 
+    private ProcessStartInfo BuildStartInfo(int port)
+    {
         var privateStartInfo = new ProcessStartInfo
         {
             FileName = "node",
@@ -396,13 +345,27 @@ public sealed class DshServiceManager : IDisposable
         privateStartInfo.ArgumentList.Add(PrivateDshEntryPath);
         privateStartInfo.ArgumentList.Add("web");
         privateStartInfo.ArgumentList.Add("--no-open");
-        if (!_baseUri.IsDefaultPort)
-        {
-            privateStartInfo.ArgumentList.Add("--port");
-            privateStartInfo.ArgumentList.Add(_baseUri.Port.ToString());
-        }
+        privateStartInfo.ArgumentList.Add("--host");
+        privateStartInfo.ArgumentList.Add("127.0.0.1");
+        privateStartInfo.ArgumentList.Add("--port");
+        privateStartInfo.ArgumentList.Add(port.ToString());
+        ApplyPrivateEnvironment(privateStartInfo);
 
         return privateStartInfo;
+    }
+
+    private void ApplyPrivateEnvironment(ProcessStartInfo startInfo) =>
+        startInfo.Environment["DSH_HOME"] = _dshHomeDirectory;
+
+    private void ConfigurePrivatePnpmPath(ProcessStartInfo startInfo)
+    {
+        var privateToolsBin = Path.Combine(_packageToolsDirectory, "node_modules", ".bin");
+        var privatePackageBin = Path.Combine(_packageDirectory, "node_modules", ".bin");
+        startInfo.Environment["PATH"] = string.Join(
+            Path.PathSeparator,
+            privateToolsBin,
+            privatePackageBin,
+            Environment.GetEnvironmentVariable("PATH") ?? string.Empty);
     }
 
     /// <summary>首次运行通过私有 pnpm 安装 latest 并固定版本；后续启动复用该版本。</summary>
@@ -484,13 +447,8 @@ public sealed class DshServiceManager : IDisposable
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
             };
-            var privateToolsBin = Path.Combine(_packageToolsDirectory, "node_modules", ".bin");
-            var privatePackageBin = Path.Combine(_packageDirectory, "node_modules", ".bin");
-            startInfo.Environment["PATH"] = string.Join(
-                Path.PathSeparator,
-                privateToolsBin,
-                privatePackageBin,
-                Environment.GetEnvironmentVariable("PATH") ?? string.Empty);
+            ApplyPrivateEnvironment(startInfo);
+            ConfigurePrivatePnpmPath(startInfo);
             startInfo.ArgumentList.Add(PrivateDshEntryPath);
             startInfo.ArgumentList.Add("plugin");
             startInfo.ArgumentList.Add("--profile");
@@ -545,13 +503,8 @@ public sealed class DshServiceManager : IDisposable
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
             };
-            var privateToolsBin = Path.Combine(_packageToolsDirectory, "node_modules", ".bin");
-            var privatePackageBin = Path.Combine(_packageDirectory, "node_modules", ".bin");
-            startInfo.Environment["PATH"] = string.Join(
-                Path.PathSeparator,
-                privateToolsBin,
-                privatePackageBin,
-                Environment.GetEnvironmentVariable("PATH") ?? string.Empty);
+            ApplyPrivateEnvironment(startInfo);
+            ConfigurePrivatePnpmPath(startInfo);
             startInfo.ArgumentList.Add(PrivateDshEntryPath);
             startInfo.ArgumentList.Add("plugin");
             startInfo.ArgumentList.Add("--profile");
@@ -595,18 +548,8 @@ public sealed class DshServiceManager : IDisposable
         }
     }
 
-    private static string GetWebProfileManifestPath()
-    {
-        var dshHome = Environment.GetEnvironmentVariable("DSH_HOME");
-        if (string.IsNullOrWhiteSpace(dshHome))
-        {
-            dshHome = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                ".dsh");
-        }
-
-        return Path.Combine(dshHome, "profiles", "web", "package.json");
-    }
+    private string GetWebProfileManifestPath() =>
+        Path.Combine(_dshHomeDirectory, "profiles", "web", "package.json");
 
     private static string? ReadPluginVersion(string profileManifest, string name)
     {
@@ -681,6 +624,8 @@ public sealed class DshServiceManager : IDisposable
             FileName = "node", WorkingDirectory = Path.GetDirectoryName(profileManifest), UseShellExecute = false,
             CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true,
         };
+        ApplyPrivateEnvironment(startInfo);
+        ConfigurePrivatePnpmPath(startInfo);
         startInfo.ArgumentList.Add(PrivateDshEntryPath); startInfo.ArgumentList.Add("plugin");
         startInfo.ArgumentList.Add("--profile"); startInfo.ArgumentList.Add("web"); startInfo.ArgumentList.Add("remove"); startInfo.ArgumentList.Add(name);
         try
@@ -717,6 +662,7 @@ public sealed class DshServiceManager : IDisposable
             RedirectStandardOutput = true,
             RedirectStandardError = true,
         };
+        ApplyPrivateEnvironment(startInfo);
         startInfo.ArgumentList.Add(PrivateDshEntryPath);
         startInfo.ArgumentList.Add("--profile");
         startInfo.ArgumentList.Add("web");
@@ -924,81 +870,6 @@ public sealed class DshServiceManager : IDisposable
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
         {
             return null;
-        }
-    }
-
-    /// <summary>
-    /// 源码模式启动前环境预检：路径、package.json、依赖（node_modules）、pnpm 可用性。
-    /// 返回问题描述；全部通过返回 null。
-    /// </summary>
-    private async Task<string?> ValidateSourceEnvironmentAsync(CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(_sourcePath))
-        {
-            return "未配置源码路径（设置 SourcePath）";
-        }
-
-        if (!Directory.Exists(_sourcePath))
-        {
-            return $"源码路径不存在：{_sourcePath}";
-        }
-
-        if (!File.Exists(Path.Combine(_sourcePath, "package.json")))
-        {
-            return $"路径下未找到 package.json（不是 DSH 仓库？）：{_sourcePath}";
-        }
-
-        if (!Directory.Exists(Path.Combine(_sourcePath, "node_modules")))
-        {
-            return $"仓库依赖未安装：请在 {_sourcePath} 下执行 pnpm install 后再试";
-        }
-
-        // 启动方式：优先 pnpm；不可用时降级为 node + tsx 直接运行（与部分源码部署环境一致）。
-        _useDirectNode = false;
-        if (await IsCommandAvailableAsync("pnpm.cmd", "--version", ct))
-        {
-            Log?.Invoke("source mode: pnpm available");
-            return null;
-        }
-
-        if (await IsCommandAvailableAsync("node", "--version", ct) &&
-            File.Exists(Path.Combine(_sourcePath, "apps", "cli", "src", "bin.ts")))
-        {
-            _useDirectNode = true;
-            Log?.Invoke("source mode: pnpm missing, falling back to node + tsx");
-            return null;
-        }
-
-        return "未找到 pnpm 或 node：请安装 pnpm（npm install -g pnpm）后重试";
-    }
-
-    /// <summary>检测命令是否可用（执行 &lt;cmd&gt; --version，1.5s 超时）。</summary>
-    private static async Task<bool> IsCommandAvailableAsync(string fileName, string args, CancellationToken ct)
-    {
-        try
-        {
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(TimeSpan.FromMilliseconds(1500));
-            using var process = Process.Start(new ProcessStartInfo
-            {
-                FileName = fileName,
-                Arguments = args,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-            });
-            if (process is null)
-            {
-                return false;
-            }
-
-            await process.WaitForExitAsync(cts.Token);
-            return process.ExitCode == 0;
-        }
-        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or OperationCanceledException or InvalidOperationException)
-        {
-            return false;
         }
     }
 
