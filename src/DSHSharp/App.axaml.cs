@@ -175,7 +175,7 @@ public partial class App : Application
             });
     }
 
-    /// <summary>手动/自动启动托管的本地服务（在线则直接返回）。</summary>
+    /// <summary>手动/自动启动 DSH-Sharp 私有 Runtime。</summary>
     public async Task StartManagedServiceAsync()
     {
         if (_serviceManager is null || _isStarting)
@@ -207,7 +207,7 @@ public partial class App : Application
         UpdateServiceUi();
     }
 
-    /// <summary>停止本客户端托管的本地服务（外部服务不受影响）。</summary>
+    /// <summary>停止本客户端拥有的私有 Runtime。</summary>
     public void StopManagedService()
     {
         _serviceManager?.Stop();
@@ -298,11 +298,15 @@ public partial class App : Application
         settingsItem.Click += (_, _) => SafePost("tray:settings", OpenSettingsWindow);
         menu.Items.Add(settingsItem);
         menu.Items.Add(new NativeMenuItemSeparator());
-        _traySessionsItem = new NativeMenuItem("最近会话");
+        _traySessionsItem = new NativeMenuItem("最近会话（私有 Runtime）")
+        {
+            IsEnabled = false,
+        };
         _traySessionsItem.Menu = new NativeMenu();
+        _traySessionsItem.Menu.Items.Add(new NativeMenuItem("（正在准备私有 Runtime）") { IsEnabled = false });
         menu.Items.Add(_traySessionsItem);
         menu.Items.Add(new NativeMenuItemSeparator());
-        _trayServiceItem = new NativeMenuItem("本地服务");
+        _trayServiceItem = new NativeMenuItem("DSH Runtime：正在准备");
         _trayServiceItem.Click += (_, _) => SafePost("tray:service", OnTrayServiceClick);
         menu.Items.Add(_trayServiceItem);
         var aboutItem = new NativeMenuItem("关于 DSH-Sharp");
@@ -429,10 +433,20 @@ public partial class App : Application
             return;
         }
 
-        if (_serviceManager.IsOwned)
+        if (_isStarting)
         {
-            _trayServiceItem.Header = "停止 DSH Runtime";
+            _trayServiceItem.Header = "DSH Runtime：正在启动…";
+            _trayServiceItem.IsEnabled = false;
+        }
+        else if (_serviceManager.IsOwned && _serviceOnline)
+        {
+            _trayServiceItem.Header = $"停止 DSH Runtime（{RuntimeBaseUrl}）";
             _trayServiceItem.IsEnabled = true;
+        }
+        else if (_serviceManager.IsOwned)
+        {
+            _trayServiceItem.Header = "DSH Runtime：正在连接…";
+            _trayServiceItem.IsEnabled = false;
         }
         else if (!_serviceOnline)
         {
@@ -441,9 +455,29 @@ public partial class App : Application
         }
         else
         {
-            _trayServiceItem.Header = "DSH Runtime：正在恢复";
+            _trayServiceItem.Header = "DSH Runtime：状态同步中";
             _trayServiceItem.IsEnabled = false;
         }
+
+        RefreshTraySessionAvailability();
+    }
+
+    /// <summary>最近会话只属于私有 Runtime；离线后清除过期会话入口。</summary>
+    private void RefreshTraySessionAvailability()
+    {
+        if (_traySessionsItem?.Menu is not { } menu)
+        {
+            return;
+        }
+
+        _traySessionsItem.IsEnabled = _serviceOnline;
+        if (_serviceOnline)
+        {
+            return;
+        }
+
+        menu.Items.Clear();
+        menu.Items.Add(new NativeMenuItem("（私有 Runtime 未运行）") { IsEnabled = false });
     }
 
     /// <summary>在 UI 线程安全执行托盘回调（托盘事件可能在非 UI 线程触发），并记录异常。</summary>

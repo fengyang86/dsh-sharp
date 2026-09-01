@@ -117,7 +117,7 @@ public partial class MainWindow : Window
         StartServiceButton.Content = busy
                 ? "正在启动…"
                 : owned
-                ? "停止本地服务"
+                ? "停止 DSH Runtime"
                 : "重试启动";
     }
 
