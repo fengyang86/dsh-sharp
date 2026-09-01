@@ -81,13 +81,19 @@
                                         <StackPanel Spacing="3">
                                             <TextBlock Text="{Binding Name}" FontWeight="SemiBold"/>
                                             <TextBlock Text="{Binding Description}" FontSize="12" TextWrapping="Wrap"/>
-                                            <TextBlock Text="版本 {Binding Version} · {Binding IsActive, StringFormat=激活：{0}}" FontSize="11"/>
+                                            <StackPanel Orientation="Horizontal" Spacing="2">
+                                                <TextBlock Text="版本" FontSize="11"/>
+                                                <TextBlock Text="{Binding Version}" FontSize="11"/>
+                                                <TextBlock Text="·" FontSize="11"/>
+                                                <TextBlock Text="{Binding IsActive, StringFormat=激活：{0}}" FontSize="11"/>
+                                            </StackPanel>
                                         </StackPanel>
                                         <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
                                             <ToggleSwitch Command="{Binding $parent[ItemsControl].DataContext.TogglePluginCommand}"
                                                           CommandParameter="{Binding}" IsChecked="{Binding IsActive}"
                                                           OffContent="未激活" OnContent="已激活"
-                                                          IsEnabled="{Binding !IsBundled, FallbackValue=True}"/>
+                                                          IsHitTestVisible="{Binding !IsBundled, FallbackValue=True}"
+                                                          Focusable="{Binding !IsBundled, FallbackValue=True}"/>
                                             <Button Content="卸载" Command="{Binding $parent[ItemsControl].DataContext.RemovePluginCommand}"
                                                     CommandParameter="{Binding}" IsVisible="{Binding !IsBundled, FallbackValue=True}"/>
                                         </StackPanel>

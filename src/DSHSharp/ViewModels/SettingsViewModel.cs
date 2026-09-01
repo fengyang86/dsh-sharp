@@ -173,7 +173,11 @@ public partial class SettingsViewModel : ViewModelBase
         ShowProfiles = value == "运行时";
         ShowPlugins = value == "插件";
         ShowGeneral = value == "偏好设置";
-        ShowAbout = value == "关于与更新";
+        ShowAbout = value == "版本与更新";
+        if (ShowAbout && !IsCheckingUpdate)
+        {
+            _ = CheckUpdate();
+        }
     }
 
     [ObservableProperty]
@@ -333,7 +337,7 @@ public partial class SettingsViewModel : ViewModelBase
     private bool _isCheckingUpdate;
 
     [ObservableProperty]
-    private string _versionInfoText = string.Empty;
+    private string _versionInfoText = "正在读取私有 DSH Runtime 信息…";
 
     [RelayCommand(CanExecute = nameof(CanCheckUpdate))]
     private async Task CheckUpdate()
