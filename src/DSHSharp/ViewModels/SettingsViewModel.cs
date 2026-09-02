@@ -141,7 +141,7 @@ public partial class SettingsViewModel : ViewModelBase
         _removePlugin = removePlugin ?? (_ => Task.FromResult(false));
         RefreshPlugins();
 
-        ServiceStatusText = serviceStatusText;
+        _serviceStatusText = serviceStatusText;
         AutoStartEnabled = settings.AutoStartEnabled;
         CloseToTray = settings.CloseToTray;
         StartMinimized = settings.StartMinimized;
@@ -197,7 +197,8 @@ public partial class SettingsViewModel : ViewModelBase
 
     // ---- 服务状态卡片 ----
 
-    public string ServiceStatusText { get; }
+    [ObservableProperty]
+    private string _serviceStatusText;
 
     // ---- 服务配置 ----
 
@@ -366,6 +367,8 @@ public partial class SettingsViewModel : ViewModelBase
     private void UpdateService() => _updateService();
 
     public ObservableCollection<PluginItem> Plugins { get; } = [];
+
+    public void UpdateServiceStatus(string text) => ServiceStatusText = text;
 
     private void RefreshPlugins()
     {

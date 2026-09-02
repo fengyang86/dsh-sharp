@@ -47,9 +47,11 @@ public sealed class DshServiceManager : IDisposable
     private readonly string _packageDirectory;
     private readonly string _packageToolsDirectory;
     private readonly string _dshHomeDirectory;
+    private string? _runtimeBackupDirectory;
     private readonly string _bundledShortcutPluginDirectory;
     private readonly SemaphoreSlim _startLock = new(1, 1);
     private Process? _process;
+    private bool _intentionalStop;
     private bool _disposed;
 
     public DshServiceManager(string baseUrl, ManagedMode mode, string? sourcePath, string? logDirectory = null)
@@ -78,6 +80,9 @@ public sealed class DshServiceManager : IDisposable
 
     /// <summary>私有 DSH_HOME。会话、profile、插件和凭据不会与外部 DSH 共用。</summary>
     public string DshHomeDirectory => _dshHomeDirectory;
+
+    /// <summary>最近一次 Runtime 更新留下的可恢复快照目录。</summary>
+    public bool CanRollbackRuntime => !string.IsNullOrEmpty(_runtimeBackupDirectory) && Directory.Exists(_runtimeBackupDirectory);
 
     /// <summary>是否持有托管进程（仅本客户端拉起的服务）。</summary>
     public bool IsOwned => _process is { HasExited: false };
@@ -205,10 +210,12 @@ public sealed class DshServiceManager : IDisposable
                 var process = Process.Start(psi);
                 if (process is null)
                 {
-                    continue;
+                    LastError = "无法启动私有 DSH Runtime 进程";
+                    return false;
                 }
 
                 _process = process;
+                _intentionalStop = false;
                 process.EnableRaisingEvents = true;
                 process.Exited += OnProcessExited;
                 PumpOutput(process);
@@ -221,6 +228,14 @@ public sealed class DshServiceManager : IDisposable
                         Log?.Invoke($"private runtime ready: {ActiveBaseUrl}");
                         return true;
                     }
+                }
+
+                if (process.HasExited)
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(300), ct);
+                    LastError = WithLogTail($"私有 DSH Runtime 启动失败（退出码 {process.ExitCode}），已停止继续尝试端口");
+                    KillOwnedProcess();
+                    return false;
                 }
 
                 KillOwnedProcess();
@@ -240,6 +255,7 @@ public sealed class DshServiceManager : IDisposable
     public void Stop()
     {
         Log?.Invoke("stopping managed service (owned)");
+        _intentionalStop = true;
         KillOwnedProcess();
     }
 
@@ -256,7 +272,21 @@ public sealed class DshServiceManager : IDisposable
             }
 
             KillOwnedProcess();
-            return await EnsurePrivatePackageAsync(forceUpdate: true, ct: ct, targetVersion: targetVersion);
+            var backup = Path.Combine(Path.GetDirectoryName(_packageDirectory) ?? _packageDirectory, "dsh-runtime-previous");
+            TryDeleteDirectory(backup);
+            if (Directory.Exists(_packageDirectory))
+            {
+                CopyDirectory(_packageDirectory, backup);
+                _runtimeBackupDirectory = backup;
+            }
+
+            var updated = await EnsurePrivatePackageAsync(forceUpdate: true, ct: ct, targetVersion: targetVersion);
+            if (!updated && CanRollbackRuntime)
+            {
+                RollbackRuntime();
+            }
+
+            return updated;
         }
         finally
         {
@@ -264,10 +294,31 @@ public sealed class DshServiceManager : IDisposable
         }
     }
 
+    /// <summary>恢复最近一次 Runtime 更新前的私有安装。</summary>
+    public bool RollbackRuntime()
+    {
+        if (!CanRollbackRuntime)
+        {
+            return false;
+        }
+
+        KillOwnedProcess();
+        var failed = _packageDirectory + ".failed";
+        TryDeleteDirectory(failed);
+        Directory.Move(_packageDirectory, failed);
+        Directory.Move(_runtimeBackupDirectory!, _packageDirectory);
+        TryDeleteDirectory(failed);
+        _runtimeBackupDirectory = null;
+        LastError = null;
+        Log?.Invoke("private DSH Runtime rolled back");
+        return true;
+    }
+
     /// <summary>释放：仅终止本客户端拉起的服务进程。</summary>
     public void Dispose()
     {
         _disposed = true;
+        _intentionalStop = true;
         KillOwnedProcess();
         _startLock.Dispose();
     }
@@ -283,7 +334,10 @@ public sealed class DshServiceManager : IDisposable
 
         Log?.Invoke($"managed process exited, code={process.ExitCode}");
         AppendLog($"--- DSH service process exited, code={process.ExitCode} ---");
-        ProcessExitedUnexpectedly?.Invoke(this, EventArgs.Empty);
+        if (!_intentionalStop && !_disposed)
+        {
+            ProcessExitedUnexpectedly?.Invoke(this, EventArgs.Empty);
+        }
     }
 
     private void KillOwnedProcess()
@@ -329,6 +383,24 @@ public sealed class DshServiceManager : IDisposable
         {
             return false;
         }
+    }
+
+    private static void CopyDirectory(string source, string destination)
+    {
+        Directory.CreateDirectory(destination);
+        foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+        {
+            var target = Path.Combine(destination, Path.GetRelativePath(source, file));
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Copy(file, target, overwrite: true);
+        }
+    }
+
+    private static void TryDeleteDirectory(string path)
+    {
+        try { if (Directory.Exists(path)) Directory.Delete(path, recursive: true); }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
     }
 
     private ProcessStartInfo BuildStartInfo(int port)

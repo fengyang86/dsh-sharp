@@ -20,4 +20,12 @@ public partial class SettingsWindow : Window
         viewModel.CloseRequested += Close;
         Closed += (_, _) => viewModel.CloseRequested -= Close;
     }
+
+    public void UpdateServiceStatus(string text)
+    {
+        if (DataContext is SettingsViewModel viewModel)
+        {
+            viewModel.UpdateServiceStatus(text);
+        }
+    }
 }

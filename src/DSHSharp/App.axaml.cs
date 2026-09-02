@@ -171,7 +171,13 @@ public partial class App : Application
             SafePost("service:crashed", () =>
             {
                 Log("managed service exited unexpectedly");
+                _serviceOnline = false;
                 UpdateServiceUi();
+                if (!_isExiting && !_isStarting)
+                {
+                    _mainWindow?.ShowNotification("DSH Runtime 已退出", "正在尝试自动恢复…");
+                    _ = RecoverRuntimeAsync();
+                }
             });
     }
 
@@ -205,6 +211,17 @@ public partial class App : Application
         }
 
         UpdateServiceUi();
+    }
+
+    private async Task RecoverRuntimeAsync()
+    {
+        await Task.Delay(TimeSpan.FromSeconds(1));
+        if (_isExiting || _isStarting || _serviceManager?.IsOwned == true)
+        {
+            return;
+        }
+
+        await StartManagedServiceAsync();
     }
 
     /// <summary>停止本客户端拥有的私有 Runtime。</summary>
@@ -636,6 +653,7 @@ public partial class App : Application
 
         var owned = _serviceManager?.IsOwned ?? false;
         vm.SetServiceState(_serviceOnline, owned, _isStarting, RuntimeBaseUrl, "Npx", "私有 Runtime");
+        _settingsWindow?.UpdateServiceStatus(BuildServiceStatusText());
 
         // 离线时隐藏 WebView（原生表面会遮挡引导页），在线时恢复。
         _mainWindow.SetWebViewVisible(_serviceOnline);
@@ -711,6 +729,15 @@ public partial class App : Application
         }
 
         await StartManagedServiceAsync();
+        if (!_serviceOnline && manager.CanRollbackRuntime)
+        {
+            Log("updated private Runtime failed health check; rolling back");
+            if (manager.RollbackRuntime())
+            {
+                _mainWindow?.ShowNotification("DSH Runtime 已回滚", "新版本未通过启动检查，已恢复上一版本。");
+                await StartManagedServiceAsync();
+            }
+        }
     }
 
     /// <summary>设置页显示的当前服务状态卡片文本（地址/模式/状态/错误）。</summary>
@@ -721,7 +748,7 @@ public partial class App : Application
         var status = _serviceManager?.IsOwned ?? false
             ? "托管中（客户端已启动服务）"
             : _serviceOnline
-                ? "在线（外部运行）"
+                ? "在线（私有 Runtime）"
                 : _isStarting
                     ? "正在启动…"
                     : "离线";
