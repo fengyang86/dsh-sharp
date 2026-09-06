@@ -7,7 +7,7 @@ window.__ModuleLoader__.load({
 		let react = require("react");
 		let _deepseek_ai_dsh_client_ui_primitives = require("@deepseek-ai/dsh-client-ui-primitives");
 		let react_jsx_runtime = require("react/jsx-runtime");
-		let _deepseek_ai_dsh_client_runtime_client = require("@deepseek-ai/dsh-client-runtime/client");
+		let _deepseek_ai_dsh_client_store = require("@deepseek-ai/dsh-client-store");
 		//#region src/client/shortcut.ts
 		function readFeatureFlags(locationLike = window.location) {
 			const query = new URLSearchParams(locationLike.search);
@@ -155,7 +155,7 @@ window.__ModuleLoader__.load({
 		//#endregion
 		//#region src/client/menu-store.ts
 		function createMenuStore() {
-			return (0, _deepseek_ai_dsh_client_runtime_client.defineStore)({
+			return (0, _deepseek_ai_dsh_client_store.defineStore)({
 				init: () => ({
 					open: false,
 					x: 0,

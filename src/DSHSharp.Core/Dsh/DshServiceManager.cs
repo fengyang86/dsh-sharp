@@ -86,7 +86,30 @@ public sealed class DshServiceManager : IDisposable
     public ManagedMode Mode => _mode;
 
     /// <summary>本次运行实际连接的地址。端口由托管进程成功绑定后确定。</summary>
-    public string ActiveBaseUrl => _activeBaseUri.AbsoluteUri.TrimEnd('/');
+    public string ActiveBaseUrl
+    {
+        get
+        {
+            // 输出泵存在调度延迟；读取日志作为最终兜底，确保认证令牌不会丢失。
+            try
+            {
+                if (File.Exists(_logPath))
+                {
+                    foreach (var line in File.ReadLines(_logPath).Reverse())
+                    {
+                        const string marker = "dsh web: ";
+                        var index = line.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+                        if (index < 0) continue;
+                        var value = line[(index + marker.Length)..].Trim();
+                        if (Uri.TryCreate(value, UriKind.Absolute, out var uri) && uri.Query.Contains("token=", StringComparison.Ordinal))
+                            return uri.AbsoluteUri.TrimEnd('/');
+                    }
+                }
+            }
+            catch (IOException) { }
+            return _activeBaseUri.AbsoluteUri.TrimEnd('/');
+        }
+    }
 
     /// <summary>私有 DSH_HOME。会话、profile、插件和凭据不会与外部 DSH 共用。</summary>
     public string DshHomeDirectory => _dshHomeDirectory;
@@ -255,6 +278,10 @@ public sealed class DshServiceManager : IDisposable
                     await Task.Delay(TimeSpan.FromSeconds(1), ct);
                     if (await ProbeAsync(_activeBaseUri, ct))
                     {
+                        // DSH 先监听端口，再异步输出带认证令牌的完整地址；等待输出泵完成，避免 WebView 抢先加载无令牌地址。
+                        var captureDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+                        while (DateTime.UtcNow < captureDeadline && string.IsNullOrEmpty(_activeBaseUri.Query))
+                            await Task.Delay(50, ct);
                         Log?.Invoke($"private runtime ready: {ActiveBaseUrl}");
                         return true;
                     }

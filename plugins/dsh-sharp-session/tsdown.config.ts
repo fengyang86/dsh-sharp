@@ -8,8 +8,8 @@ const fromRoot = (path: string): string => resolve(ROOT, path)
 const EXTERNALS = new Set([
   '@deepseek-ai/cordis',
   'react', 'react/jsx-runtime', 'react-dom', 'react-dom/client',
-  '@deepseek-ai/dsh-client-runtime/client',
   '@deepseek-ai/dsh-client-ui-primitives',
+  '@deepseek-ai/dsh-client-store',
 ])
 
 const node: UserConfig = {
