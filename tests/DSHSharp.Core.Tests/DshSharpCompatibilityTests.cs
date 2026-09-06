@@ -7,6 +7,7 @@ public sealed class DshSharpCompatibilityTests
     [Theory]
     [InlineData("0.1.0-rc.8")]
     [InlineData("0.1.1-rc.2")]
+    [InlineData("0.1.2-rc.1")]
     public void AcceptsVersionsInsideContract(string version)
         => Assert.True(DshSharpCompatibility.IsCompatible(version));
 
