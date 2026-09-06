@@ -53,6 +53,7 @@ public sealed class DshServiceManager : IDisposable
     private readonly string _runtimeTransactionPath;
     private readonly string _packageToolsDirectory;
     private readonly string _dshHomeDirectory;
+    private readonly string _runtimePidPath;
     private string? _runtimeBackupDirectory;
     private readonly string _bundledShortcutPluginDirectory;
     private readonly SemaphoreSlim _startLock = new(1, 1);
@@ -76,6 +77,7 @@ public sealed class DshServiceManager : IDisposable
         _runtimeTransactionPath = Path.Combine(dir, "dsh-runtime-transaction.json");
         _packageToolsDirectory = Path.Combine(_packageDirectory, ".tools");
         _dshHomeDirectory = Path.Combine(dir, "dsh-home");
+        _runtimePidPath = Path.Combine(dir, "dsh-runtime.pid");
         _bundledShortcutPluginDirectory = Path.Combine(AppContext.BaseDirectory, "Plugins", "dsh-sharp-session");
     }
 
@@ -144,6 +146,7 @@ public sealed class DshServiceManager : IDisposable
 
     /// <summary>私有 npm 包当前安装的版本；未安装或元数据损坏时返回 null。</summary>
     public string? InstalledPackageVersion => ReadInstalledPackageVersion();
+    public bool NeedsRuntimeUpdate => !string.Equals(InstalledPackageVersion, DshSharpCompatibility.DefaultDshVersion, StringComparison.Ordinal);
 
     /// <summary>读取当前 web profile 中已安装的插件及激活状态。</summary>
     public IReadOnlyList<ProfilePlugin> ListProfilePlugins()
@@ -223,6 +226,7 @@ public sealed class DshServiceManager : IDisposable
         await _startLock.WaitAsync(ct);
         try
         {
+            CleanupOrphanedRuntimeProcess();
             if (_disposed)
             {
                 return false;
@@ -268,6 +272,7 @@ public sealed class DshServiceManager : IDisposable
                 }
 
                 _process = process;
+                File.WriteAllText(_runtimePidPath, process.Id.ToString(System.Globalization.CultureInfo.InvariantCulture));
                 _intentionalStop = false;
                 process.EnableRaisingEvents = true;
                 process.Exited += OnProcessExited;
@@ -472,7 +477,23 @@ public sealed class DshServiceManager : IDisposable
         finally
         {
             process.Dispose();
+            try { if (File.Exists(_runtimePidPath)) File.Delete(_runtimePidPath); } catch (IOException) { }
         }
+    }
+
+    private void CleanupOrphanedRuntimeProcess()
+    {
+        try
+        {
+            if (!File.Exists(_runtimePidPath) || !int.TryParse(File.ReadAllText(_runtimePidPath), out var pid)) return;
+            using var process = Process.GetProcessById(pid);
+            if (!process.HasExited) process.Kill(entireProcessTree: true);
+        }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException or ArgumentException or System.ComponentModel.Win32Exception)
+        {
+            Log?.Invoke($"orphaned runtime cleanup skipped: {ex.Message}");
+        }
+        finally { try { if (File.Exists(_runtimePidPath)) File.Delete(_runtimePidPath); } catch (IOException) { } }
     }
 
     private IEnumerable<int> CandidatePorts()

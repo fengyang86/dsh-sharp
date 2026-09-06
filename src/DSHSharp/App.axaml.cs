@@ -805,7 +805,10 @@ public partial class App : Application
 
         var error = _serviceManager?.LastError;
         var errorLine = string.IsNullOrEmpty(error) ? "" : $"\n最近错误：{error}";
-        return $"● {RuntimeBaseUrl}\n运行时：{modeText}\n数据目录：{_serviceManager?.DshHomeDirectory ?? "未初始化"}\n状态：{status}{errorLine}";
+        var updateLine = _serviceManager?.NeedsRuntimeUpdate == true
+            ? $"\n版本提示：当前 {_serviceManager.InstalledPackageVersion}，建议更新到 {DshSharpCompatibility.DefaultDshVersion}"
+            : "";
+        return $"● {RuntimeBaseUrl}\n运行时：{modeText}\n数据目录：{_serviceManager?.DshHomeDirectory ?? "未初始化"}\n状态：{status}{updateLine}{errorLine}";
     }
 
     private string BuildOnboardingDetail()
