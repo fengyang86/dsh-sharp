@@ -37,7 +37,7 @@ public static class DshFrameParser
             var text = title.GetString();
             return id is null || text is null ? null : new SessionTitleInfo(id, text);
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
         {
             return null;
         }
@@ -78,7 +78,7 @@ public static class DshFrameParser
                 : null;
             return new TurnEndInfo(id, reasonKind);
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
         {
             return null;
         }

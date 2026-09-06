@@ -20,9 +20,13 @@ export function installSessionNavigation(sessions: ShortcutSessions): () => void
     const match = window.location.hash.match(/(?:^#|&)dsh-session=([^&]+)/)
       ?? window.location.search.match(/[?&]dsh-session=([^&]+)/)
     if (match === null) return
-    const id = decodeURIComponent(match[1])
-    sessions.open(id)
-    history.replaceState(null, '', window.location.pathname)
+    try {
+      const id = decodeURIComponent(match[1])
+      sessions.open(id)
+      history.replaceState(null, '', window.location.pathname)
+    } catch (error: unknown) {
+      console.error('[dsh-sharp-session] 打开托盘会话失败:', error)
+    }
   }
   window.addEventListener('hashchange', openFromHash)
   openFromHash()

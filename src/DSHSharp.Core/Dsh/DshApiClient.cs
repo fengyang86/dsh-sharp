@@ -138,7 +138,7 @@ public static class DshRpcParser
                 result.Add(new DshSessionSummary(sessionId, title, running, updatedAt, archived));
             }
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
         {
             // 响应异常：返回空列表。
         }
@@ -165,7 +165,7 @@ public static class DshRpcParser
                 return versionEl.GetString();
             }
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
         {
             // 解析失败：返回 null。
         }
@@ -184,7 +184,7 @@ public static class DshRpcParser
                 return versionEl.GetString();
             }
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
         {
             // 解析失败：返回 null。
         }
@@ -239,7 +239,7 @@ public static class DshRpcParser
                 return combined.Length > 0 ? combined : null;
             }
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
         {
             // 响应异常：返回 null。
         }

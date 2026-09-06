@@ -66,7 +66,14 @@ public partial class App : Application
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             Settings = _settingsService.Load();
-            _settingsService.Save(Settings);
+            try
+            {
+                _settingsService.Save(Settings);
+            }
+            catch (Exception ex)
+            {
+                Log($"settings initial save failed: {ex.Message}");
+            }
             // 自启动开关以系统实际状态为准（防止设置与注册表脱节）。
             Settings.AutoStartEnabled = _autoStart.IsEnabled();
             ApplyTheme(Settings.Theme);
@@ -294,7 +301,16 @@ public partial class App : Application
         }
 
         Settings = updated;
-        _settingsService.Save(Settings);
+        try
+        {
+            _settingsService.Save(Settings);
+        }
+        catch (Exception ex)
+        {
+            Log($"settings save failed: {ex.Message}");
+            _mainWindow?.ShowNotification("设置保存失败", ex.Message);
+            return;
+        }
         Log("settings saved");
 
         _mainWindow?.ShowNotification(
@@ -709,34 +725,58 @@ public partial class App : Application
         Log("updating privately managed DSH package");
         _isStarting = true;
         UpdateServiceUi();
-        string? targetVersion = null;
-        try { targetVersion = await (_apiClient ?? new DshApiClient(RuntimeBaseUrl)).GetNpmLatestVersionAsync(); }
-        catch { }
-        if (!DshSharpCompatibility.IsCompatible(targetVersion))
+        try
+        {
+            string? targetVersion;
+            try
+            {
+                targetVersion = await (_apiClient ?? new DshApiClient(RuntimeBaseUrl)).GetNpmLatestVersionAsync();
+            }
+            catch (Exception ex)
+            {
+                _mainWindow?.ShowNotification("DSH 更新失败", $"无法查询 npm 版本：{ex.Message}");
+                return;
+            }
+
+            if (!DshSharpCompatibility.IsCompatible(targetVersion))
+            {
+                _mainWindow?.ShowNotification("DSH 更新已阻止", $"npm 版本 {targetVersion ?? "未知"} 不在支持范围 {DshSharpCompatibility.SupportedRange} 内");
+                return;
+            }
+
+            var updated = await manager.UpdatePrivatePackageAsync(targetVersion);
+            if (!updated)
+            {
+                _mainWindow?.ShowNotification("DSH 更新失败", manager.LastError ?? "未知错误");
+                return;
+            }
+
+            // 更新阶段结束后交给正常启动流程完成健康检查。
+            _isStarting = false;
+            await StartManagedServiceAsync();
+            if (!_serviceOnline && manager.CanRollbackRuntime)
+            {
+                Log("updated private Runtime failed health check; rolling back");
+                if (manager.RollbackRuntime())
+                {
+                    _mainWindow?.ShowNotification("DSH Runtime 已回滚", "新版本未通过启动检查，已恢复上一版本。");
+                    await StartManagedServiceAsync();
+                }
+            }
+            else if (_serviceOnline && manager.CanRollbackRuntime && !manager.CommitRuntimeUpdate())
+            {
+                Log($"Runtime update commit deferred: {manager.LastError}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"managed Runtime update failed: {ex}");
+            _mainWindow?.ShowNotification("DSH 更新失败", ex.Message);
+        }
+        finally
         {
             _isStarting = false;
-            _mainWindow?.ShowNotification("DSH 更新已阻止", $"npm 版本 {targetVersion ?? "未知"} 不在支持范围 {DshSharpCompatibility.SupportedRange} 内");
             UpdateServiceUi();
-            return;
-        }
-        var updated = await manager.UpdatePrivatePackageAsync(targetVersion);
-        _isStarting = false;
-        if (!updated)
-        {
-            _mainWindow?.ShowNotification("DSH 更新失败", manager.LastError ?? "未知错误");
-            UpdateServiceUi();
-            return;
-        }
-
-        await StartManagedServiceAsync();
-        if (!_serviceOnline && manager.CanRollbackRuntime)
-        {
-            Log("updated private Runtime failed health check; rolling back");
-            if (manager.RollbackRuntime())
-            {
-                _mainWindow?.ShowNotification("DSH Runtime 已回滚", "新版本未通过启动检查，已恢复上一版本。");
-                await StartManagedServiceAsync();
-            }
         }
     }
 

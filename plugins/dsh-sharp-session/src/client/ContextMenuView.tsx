@@ -14,11 +14,9 @@ const OPEN_WORKSPACE_ITEM = {
  * 当前 DSH 没有行级菜单贡献插槽，因此只通过官方行的语义 ARIA 属性定位。
  */
 export function ContextMenuView({
-  useStore, actions, useSessions, useWorkspaces, openWorkspace,
+  useStore, actions, openWorkspace, getSessionSnapshot, getWorkspaceItems,
 }) {
   const menu = useStore(state => state)
-  const sessions = useSessions(state => state)
-  const workspaces = useWorkspaces(state => state.items)
   const actionsRef = useRef(actions)
   actionsRef.current = actions
 
@@ -29,28 +27,24 @@ export function ContextMenuView({
 
       const workspaceRow = target.closest('[role="treeitem"][aria-expanded]')
       if (workspaceRow instanceof HTMLElement) {
-        const text = workspaceRow.textContent?.trim() ?? ''
-        const workspace = workspaces.find(item => text.startsWith(item.title))
-        if (workspace === undefined) return
+        // DSH 当前没有向插件暴露工作区行 ID。仅在目录名唯一匹配时启用，
+        // 同名目录宁可不展示菜单，也不能打开错误的工作区。
+        const label = workspaceRow.textContent?.trim() ?? ''
+        const matches = getWorkspaceItems().filter(item => workspaceLabel(item.path) === label)
+        if (matches.length !== 1) return
         event.preventDefault()
         actionsRef.current.openAt(event.clientX, event.clientY, {
-          kind: 'workspace', path: workspace.path,
+          kind: 'workspace', path: matches[0].path,
         })
         return
       }
 
       const sessionRow = target.closest('[role="treeitem"][aria-selected]')
       if (!(sessionRow instanceof HTMLElement)) return
-      const selected = sessionRow.getAttribute('aria-selected') === 'true'
-      const current = sessions.current
-      const text = sessionRow.textContent?.trim() ?? ''
-      const ids = sessions.ids ?? Object.keys(sessions.byId)
-      const sessionId = selected && current !== undefined
-        ? current
-        : ids.find(id => {
-            const session = sessions.byId[id]
-            return session !== undefined && text.startsWith(session.title ?? '')
-          })
+      // 官方行没有将 sessionId 写入 DOM。右键未选中行时先复用它的官方点击，
+      // 再从 sessions 服务读取刚刚选中的准确 ID，避免按标题猜测同名会话。
+      if (sessionRow.getAttribute('aria-selected') !== 'true') sessionRow.click()
+      const sessionId = getSessionSnapshot().current
       if (sessionId === undefined) return
       event.preventDefault()
       actionsRef.current.openAt(event.clientX, event.clientY, {
@@ -60,7 +54,7 @@ export function ContextMenuView({
 
     document.addEventListener('contextmenu', onContextMenu, true)
     return () => { document.removeEventListener('contextmenu', onContextMenu, true) }
-  }, [sessions, workspaces])
+  }, [getSessionSnapshot, getWorkspaceItems])
 
   if (!menu.open || menu.target === null) return null
   const item = menu.target.kind === 'workspace' ? OPEN_WORKSPACE_ITEM : COPY_SESSION_ITEM
@@ -88,4 +82,10 @@ export function ContextMenuView({
       anchor={<span aria-hidden="true" />}
     />
   )
+}
+
+function workspaceLabel(path: string): string {
+  const normalized = path.replace(/[\\/]+$/, '')
+  const segments = normalized.split(/[\\/]/)
+  return segments.at(-1) ?? normalized
 }

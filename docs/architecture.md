@@ -13,6 +13,7 @@
 - **连接归属**：命令、快捷键和 DSH 增强插件最终都归属于明确的连接与当前会话。
 - **插件边界**：客户端是宿主，功能按领域拆分为 DSH 插件；不开放任意 .NET DLL 客户端插件。
 - **插件组织**：插件按功能域拆分（会话、工作区、集成等），客户端按内置插件套件统一安装、升级和管理。
+- **Runtime 更新**：新版本先在同级 staging 目录完整安装和校验，再通过事务记录执行目录交换；启动失败可恢复 previous。详见 [决策 0002](decisions/0002-atomic-runtime-updates.md)。
 
 ## 1. 版本契约
 
@@ -28,16 +29,18 @@ DSHSharp.slnx
 │   │   ├── App.axaml(.cs)         # 全局组装：托盘/监控/托管/通知/配置切换
 │   │   ├── Views/
 │   │   │   ├── MainWindow         # 主窗口：自定义标题栏 + WebView + 引导页 + 状态栏
-│   │   │   ├── SettingsWindow     # 设置：左侧导航四面板（服务配置/通用/版本/关于）
+│   │   │   ├── SettingsWindow     # 设置：左侧导航四面板（私有 Runtime/插件/偏好/版本）
 │   │   │   └── ToastWindow        # 置顶通知小窗口（独立 HWND，规避 WebView2 遮挡）
 │   │   ├── ViewModels/            # MainWindowViewModel / SettingsViewModel
 │   │   └── Services/              # NotificationSound（Win32 PlaySound）
 │   └── DSHSharp.Core/             # 核心服务层（不依赖 UI，可单元测试）
-│       ├── Configuration/         # AppSettings / ServiceProfile / ProfileHelper
+│       ├── Configuration/         # AppSettings（兼容读取旧连接配置）
 │       ├── Services/              # 设置持久化 / 自启动 / 单实例
 │       └── Dsh/                   # 事件监控 / 服务托管 / HTTP RPC / 帧解析
-└── tests/DSHSharp.Core.Tests/     # 34 项单元测试
+└── tests/DSHSharp.Core.Tests/     # 55 项单元测试
 ```
+
+平台图标资源位于 `src/DSHSharp/Assets/Brand` 与 `packaging/`：Avalonia 窗口和托盘使用 PNG，Windows 将多尺寸 ICO 嵌入 EXE，Linux 使用 desktop/hicolor，macOS 使用 ICNS。
 
 ## 3. 分层职责
 
@@ -94,6 +97,21 @@ Program.Main
  └─ 失败时显示重试与服务日志尾部
 所有权语义：仅客户端 spawn 的私有 Runtime 会在退出/停止时被杀（Process.Kill 进程树）。
 外部或源码 DSH 不被探测、连接或停止。
+
+### 3.3 Runtime 更新流程
+
+```
+检查兼容范围
+ └─ dsh-runtime-staging 独立安装并校验
+     ├─ 失败：删除 staging，继续当前版本
+     └─ 成功：记录 Prepared
+         └─ 当前目录改名 previous（ActiveMoved）
+             └─ staging 改名 active（Promoted）
+                 ├─ 健康：删除 previous，清理事务记录
+                 └─ 失败：交换回 previous 并重启
+```
+
+应用启动时先处理未完成事务，避免进程在目录交换窗口退出后留下不可用状态。
 ```
 
 ### 3.3 会话完成通知流程

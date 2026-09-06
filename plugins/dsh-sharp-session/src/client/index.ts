@@ -34,6 +34,8 @@ export function apply(ctx: ShortcutContext): void {
       store: createMenuStore(),
       inject: () => ({
         openWorkspace: (path: string) => ctx.workspaces.openPath(path),
+        getSessionSnapshot: () => ctx.sessions.list.getSnapshot(),
+        getWorkspaceItems: () => ctx.workspaces.list.getSnapshot().items,
       }),
     },
     ContextMenuView,

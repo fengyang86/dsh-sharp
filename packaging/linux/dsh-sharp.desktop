@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=DSH-Sharp
+Comment=DeepSeek Harness 桌面客户端
+Exec=dsh-sharp %U
+Icon=dsh-sharp
+Terminal=false
+Categories=Development;Utility;
+StartupWMClass=DSHSharp

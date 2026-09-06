@@ -1,8 +1,7 @@
 namespace DSHSharp.Core.Configuration;
 
 /// <summary>
-/// 一个服务连接配置（对应一个 DSH 实例）：
-/// 地址 + 托管模式 + 源码路径。支持多配置并存、切换激活。
+/// 旧版服务连接配置。仅用于读取和迁移历史 settings.json，新的设置文件不再写出。
 /// </summary>
 public sealed class ServiceProfile
 {
@@ -47,12 +46,11 @@ public sealed class AppSettings
     public bool NotificationSoundEnabled { get; set; } = true;
 
     /// <summary>
-    /// 服务托管模式：None=纯探测不托管；Npx=离线时托管私有目录中的官方包；
-    /// Source=离线时在 SourcePath 下托管 pnpm dsh web。
+    /// 旧版托管模式字段。仅用于读取和迁移历史 settings.json。
     /// </summary>
     public string ManagedMode { get; set; } = "Npx";
 
-    /// <summary>源码部署仓库路径（ManagedMode=Source 时使用）。</summary>
+    /// <summary>旧版源码路径字段。仅用于读取和迁移历史 settings.json。</summary>
     public string? SourcePath { get; set; }
 
     /// <summary>上次窗口位置/大小（null 表示未记录，使用默认布局）。</summary>
@@ -67,9 +65,9 @@ public sealed class AppSettings
     /// <summary>上次窗口是否最大化。</summary>
     public bool WindowMaximized { get; set; }
 
-    /// <summary>全部服务连接配置（多配置并存）。</summary>
+    /// <summary>旧版连接配置列表。仅用于读取和迁移历史 settings.json。</summary>
     public List<ServiceProfile> Profiles { get; set; } = [];
 
-    /// <summary>当前激活的配置名（对应 Profiles 中的 Name）。</summary>
+    /// <summary>旧版激活配置名。仅用于读取和迁移历史 settings.json。</summary>
     public string ActiveProfileName { get; set; } = "默认配置";
 }

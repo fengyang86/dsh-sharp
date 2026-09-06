@@ -44,6 +44,8 @@ public sealed class DshEventMonitor : IAsyncDisposable
     private readonly ConcurrentDictionary<string, string> _sessionTitles = new(StringComparer.Ordinal);
     private Task? _muxTask;
     private Task? _heartbeatTask;
+    private int _started;
+    private int _disposed;
 
     public DshEventMonitor(string baseUrl)
     {
@@ -59,6 +61,10 @@ public sealed class DshEventMonitor : IAsyncDisposable
 
     public void Start()
     {
+        if (Interlocked.Exchange(ref _started, 1) != 0)
+        {
+            return;
+        }
         _muxTask = Task.Run(() => RunStreamLoopAsync(_cts.Token));
         _heartbeatTask = Task.Run(() => RunHeartbeatLoopAsync(_cts.Token));
     }
@@ -69,16 +75,23 @@ public sealed class DshEventMonitor : IAsyncDisposable
     /// </summary>
     public void Dispose()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
         Log?.Invoke("DshEventMonitor.Dispose: cancelling");
         _cts.Cancel();
-        _cts.Dispose();
         Log?.Invoke("DshEventMonitor.Dispose: done");
     }
 
     public async ValueTask DisposeAsync()
     {
+        var disposeNow = Interlocked.Exchange(ref _disposed, 1) == 0;
         Log?.Invoke("DshEventMonitor.DisposeAsync: cancelling");
-        _cts.Cancel();
+        if (disposeNow)
+        {
+            _cts.Cancel();
+        }
         try
         {
             var tasks = new[] { _muxTask, _heartbeatTask }
@@ -119,6 +132,10 @@ public sealed class DshEventMonitor : IAsyncDisposable
             catch (WebSocketException)
             {
                 // 服务未就绪或连接被重置：退避后重连。
+            }
+            catch (Exception ex)
+            {
+                Log?.Invoke($"event stream failed: {ex.Message}");
             }
 
             try
@@ -175,7 +192,14 @@ public sealed class DshEventMonitor : IAsyncDisposable
         {
             _sessionTitles.TryGetValue(turnEnd.Value.SessionId, out var sessionTitle);
             Log?.Invoke($"turn/end completed: session={turnEnd.Value.SessionId}");
-            SessionCompleted?.Invoke(this, new SessionCompletedEventArgs(turnEnd.Value.SessionId, sessionTitle));
+            try
+            {
+                SessionCompleted?.Invoke(this, new SessionCompletedEventArgs(turnEnd.Value.SessionId, sessionTitle));
+            }
+            catch (Exception ex)
+            {
+                Log?.Invoke($"session completion handler failed: {ex.Message}");
+            }
         }
     }
 
@@ -193,7 +217,14 @@ public sealed class DshEventMonitor : IAsyncDisposable
             if (online != lastOnline)
             {
                 lastOnline = online;
-                ServiceAvailabilityChanged?.Invoke(this, new ServiceAvailabilityEventArgs(online));
+                try
+                {
+                    ServiceAvailabilityChanged?.Invoke(this, new ServiceAvailabilityEventArgs(online));
+                }
+                catch (Exception ex)
+                {
+                    Log?.Invoke($"service availability handler failed: {ex.Message}");
+                }
             }
 
             try

@@ -53,6 +53,52 @@ public sealed class AppSettingsService
             Directory.CreateDirectory(directory);
         }
 
-        File.WriteAllText(_settingsPath, JsonSerializer.Serialize(settings, JsonOptions));
+        var tempPath = _settingsPath + ".tmp";
+        File.WriteAllText(tempPath, JsonSerializer.Serialize(PersistedSettings.From(settings), JsonOptions));
+        try
+        {
+            if (File.Exists(_settingsPath))
+                File.Replace(tempPath, _settingsPath, null);
+            else
+                File.Move(tempPath, _settingsPath);
+        }
+        finally
+        {
+            if (File.Exists(tempPath)) File.Delete(tempPath);
+        }
+    }
+
+    /// <summary>
+    /// 写出模型刻意不包含旧版多连接字段。加载时仍接受它们，保证历史 settings.json
+    /// 可直接启动；下一次保存会迁移到“单一私有 Runtime”的设置格式。
+    /// </summary>
+    private sealed class PersistedSettings
+    {
+        public bool AutoStartEnabled { get; init; }
+        public bool CloseToTray { get; init; }
+        public bool StartMinimized { get; init; }
+        public string Theme { get; init; } = "System";
+        public bool SessionCompleteNotifications { get; init; }
+        public bool NotificationSoundEnabled { get; init; }
+        public double? WindowLeft { get; init; }
+        public double? WindowTop { get; init; }
+        public double? WindowWidth { get; init; }
+        public double? WindowHeight { get; init; }
+        public bool WindowMaximized { get; init; }
+
+        public static PersistedSettings From(AppSettings settings) => new()
+        {
+            AutoStartEnabled = settings.AutoStartEnabled,
+            CloseToTray = settings.CloseToTray,
+            StartMinimized = settings.StartMinimized,
+            Theme = settings.Theme,
+            SessionCompleteNotifications = settings.SessionCompleteNotifications,
+            NotificationSoundEnabled = settings.NotificationSoundEnabled,
+            WindowLeft = settings.WindowLeft,
+            WindowTop = settings.WindowTop,
+            WindowWidth = settings.WindowWidth,
+            WindowHeight = settings.WindowHeight,
+            WindowMaximized = settings.WindowMaximized,
+        };
     }
 }

@@ -5,6 +5,7 @@
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\avalonia-logo.ico</ApplicationIcon>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
     <Version>0.2.0</Version>
     <AssemblyVersion>0.2.0.0</AssemblyVersion>
@@ -14,6 +15,11 @@
   <ItemGroup>
     <Folder Include="Models\" />
     <AvaloniaResource Include="Assets\**" />
+    <None Include="..\..\packaging\linux\dsh-sharp.desktop" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\packaging\linux\icons\**\*" Link="linux-icons\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\packaging\macos\Info.plist" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Assets\Brand\DSHSharp.icns" Link="DSHSharp.icns" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="Assets\avalonia-logo.ico" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

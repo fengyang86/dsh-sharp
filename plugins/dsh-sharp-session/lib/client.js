@@ -14,9 +14,13 @@ window.__ModuleLoader__.load({
 			const openFromHash = () => {
 				const match = window.location.hash.match(/(?:^#|&)dsh-session=([^&]+)/) ?? window.location.search.match(/[?&]dsh-session=([^&]+)/);
 				if (match === null) return;
-				const id = decodeURIComponent(match[1]);
-				sessions.open(id);
-				history.replaceState(null, "", window.location.pathname);
+				try {
+					const id = decodeURIComponent(match[1]);
+					sessions.open(id);
+					history.replaceState(null, "", window.location.pathname);
+				} catch (error) {
+					console.error("[dsh-sharp-session] 打开托盘会话失败:", error);
+				}
 			};
 			window.addEventListener("hashchange", openFromHash);
 			openFromHash();
@@ -74,10 +78,8 @@ window.__ModuleLoader__.load({
 		* 复用 DSH 官方 Menu、sessions 和 workspaces 服务提供会话域右键动作。
 		* 当前 DSH 没有行级菜单贡献插槽，因此只通过官方行的语义 ARIA 属性定位。
 		*/
-		function ContextMenuView({ useStore, actions, useSessions, useWorkspaces, openWorkspace }) {
+		function ContextMenuView({ useStore, actions, openWorkspace, getSessionSnapshot, getWorkspaceItems }) {
 			const menu = useStore((state) => state);
-			const sessions = useSessions((state) => state);
-			const workspaces = useWorkspaces((state) => state.items);
 			const actionsRef = (0, react.useRef)(actions);
 			actionsRef.current = actions;
 			(0, react.useEffect)(() => {
@@ -86,26 +88,20 @@ window.__ModuleLoader__.load({
 					if (!(target instanceof Element)) return;
 					const workspaceRow = target.closest("[role=\"treeitem\"][aria-expanded]");
 					if (workspaceRow instanceof HTMLElement) {
-						const text = workspaceRow.textContent?.trim() ?? "";
-						const workspace = workspaces.find((item) => text.startsWith(item.title));
-						if (workspace === void 0) return;
+						const label = workspaceRow.textContent?.trim() ?? "";
+						const matches = getWorkspaceItems().filter((item) => workspaceLabel(item.path) === label);
+						if (matches.length !== 1) return;
 						event.preventDefault();
 						actionsRef.current.openAt(event.clientX, event.clientY, {
 							kind: "workspace",
-							path: workspace.path
+							path: matches[0].path
 						});
 						return;
 					}
 					const sessionRow = target.closest("[role=\"treeitem\"][aria-selected]");
 					if (!(sessionRow instanceof HTMLElement)) return;
-					const selected = sessionRow.getAttribute("aria-selected") === "true";
-					const current = sessions.current;
-					const text = sessionRow.textContent?.trim() ?? "";
-					const ids = sessions.ids ?? Object.keys(sessions.byId);
-					const sessionId = selected && current !== void 0 ? current : ids.find((id) => {
-						const session = sessions.byId[id];
-						return session !== void 0 && text.startsWith(session.title ?? "");
-					});
+					if (sessionRow.getAttribute("aria-selected") !== "true") sessionRow.click();
+					const sessionId = getSessionSnapshot().current;
 					if (sessionId === void 0) return;
 					event.preventDefault();
 					actionsRef.current.openAt(event.clientX, event.clientY, {
@@ -117,7 +113,7 @@ window.__ModuleLoader__.load({
 				return () => {
 					document.removeEventListener("contextmenu", onContextMenu, true);
 				};
-			}, [sessions, workspaces]);
+			}, [getSessionSnapshot, getWorkspaceItems]);
 			if (!menu.open || menu.target === null) return null;
 			const item = menu.target.kind === "workspace" ? OPEN_WORKSPACE_ITEM : COPY_SESSION_ITEM;
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Menu, {
@@ -141,6 +137,10 @@ window.__ModuleLoader__.load({
 				},
 				anchor: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { "aria-hidden": "true" })
 			});
+		}
+		function workspaceLabel(path) {
+			const normalized = path.replace(/[\\/]+$/, "");
+			return normalized.split(/[\\/]/).at(-1) ?? normalized;
 		}
 		//#endregion
 		//#region src/client/menu-store.ts
@@ -186,7 +186,11 @@ window.__ModuleLoader__.load({
 				id: "dsh-sharp-session.context-menu",
 				order: 100,
 				store: createMenuStore(),
-				inject: () => ({ openWorkspace: (path) => ctx.workspaces.openPath(path) })
+				inject: () => ({
+					openWorkspace: (path) => ctx.workspaces.openPath(path),
+					getSessionSnapshot: () => ctx.sessions.list.getSnapshot(),
+					getWorkspaceItems: () => ctx.workspaces.list.getSnapshot().items
+				})
 			}, ContextMenuView));
 		}
 		//#endregion

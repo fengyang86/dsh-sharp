@@ -21,7 +21,7 @@ public sealed class AppSettingsServiceTests : IDisposable
     }
 
     [Fact]
-    public void Save_ThenLoad_RoundTripsAllProperties()
+    public void Save_ThenLoad_RoundTripsSupportedPreferences()
     {
         var service = new AppSettingsService(_dir);
         var settings = new AppSettings
@@ -38,13 +38,35 @@ public sealed class AppSettingsServiceTests : IDisposable
         service.Save(settings);
         var loaded = service.Load();
 
-        Assert.Equal("http://localhost:9999", loaded.WebUrl);
+        Assert.Equal(AppSettings.DefaultWebUrl, loaded.WebUrl);
         Assert.True(loaded.AutoStartEnabled);
         Assert.False(loaded.CloseToTray);
         Assert.True(loaded.StartMinimized);
         Assert.Equal("Dark", loaded.Theme);
         Assert.False(loaded.SessionCompleteNotifications);
         Assert.False(loaded.NotificationSoundEnabled);
+    }
+
+    [Fact]
+    public void Save_MigratesLegacyConnectionFieldsOutOfPersistedSettings()
+    {
+        var service = new AppSettingsService(_dir);
+        service.Save(new AppSettings
+        {
+            WebUrl = "http://localhost:9999",
+            ManagedMode = "Source",
+            SourcePath = @"D:\old-dsh",
+            Profiles = [new ServiceProfile { Name = "旧配置" }],
+            ActiveProfileName = "旧配置",
+        });
+
+        var json = File.ReadAllText(Path.Combine(_dir, "settings.json"));
+
+        Assert.DoesNotContain("WebUrl", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("ManagedMode", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("SourcePath", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("Profiles", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("ActiveProfileName", json, StringComparison.Ordinal);
     }
 
     [Fact]

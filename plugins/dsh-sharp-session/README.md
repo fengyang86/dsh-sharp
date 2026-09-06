@@ -21,8 +21,8 @@ pnpm build
 pnpm dsh plugin --profile web add link:<dsh-sharp>/plugins/dsh-sharp-session
 ```
 
-DSH-Sharp 的官方包托管模式会自动把发布目录中的插件链接到 `web` 配置。源码模式、纯探测模式和远程服务由环境所有者显式安装，客户端不会修改外部 DSH 环境。
+DSH-Sharp 会自动把发布目录中的插件链接到其私有 Runtime 的 `web` 配置；客户端不会修改外部 DSH 环境。
 
 插件的 bundle 补丁只负责把自身加入 DSH Loader；浏览器端通过 DSH 公共 `sessions` 服务读取当前会话，并调用公开的 `session.cancel()`。插件卸载或热重载时会同步移除文档级键盘监听器。
 
-工作区打开动作使用 DSH 官方 `workspaces.openPath(path)` 服务；其底层 `host.openPath` 会按平台调用 Windows `Invoke-Item`、macOS `open` 或 Linux `xdg-open`。当前 DSH 尚未提供工作区行级菜单贡献插槽，因此插件通过工作区行的语义 ARIA 属性定位，并在官方 `shell.overlay` 插槽中渲染官方 `Menu`。
+工作区打开动作使用 DSH 官方 `workspaces.openPath(path)` 服务；其底层 `host.openPath` 会按平台调用 Windows `Invoke-Item`、macOS `open` 或 Linux `xdg-open`。当前 DSH 尚未提供工作区行级菜单贡献插槽或稳定的行标识，插件只会在目录名唯一时显示工作区右键菜单；重名目录不显示该动作，避免误打开错误路径。会话右键未选中行会先调用官方行的选中动作，再从 `sessions` 服务读取精确会话 ID，不按标题猜测。

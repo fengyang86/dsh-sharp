@@ -6,6 +6,7 @@ public static class DshSharpCompatibility
     public const string ProductVersion = "0.2.0";
     public const string MinimumDshVersion = "0.1.0-rc.8";
     public const string MaximumDshVersionExclusive = "0.2.0";
+    public const string DefaultDshVersion = "0.1.1-rc.2";
     public const string SupportedRange = ">=0.1.0-rc.8 <0.2.0";
     public static readonly IReadOnlyList<string> VerifiedDshVersions = ["0.1.0-rc.8", "0.1.1-rc.2"];
 

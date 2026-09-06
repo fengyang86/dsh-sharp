@@ -4,6 +4,7 @@ using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using DSHSharp.Core.Compatibility;
 
 namespace DSHSharp.Core.Dsh;
 
@@ -33,11 +34,13 @@ public enum ManagedMode
 public sealed class DshServiceManager : IDisposable
 {
     public sealed record ProfilePlugin(string Name, string? Version, bool IsBundled, bool IsActive, string? Description);
+    private sealed record RuntimeUpdateTransaction(string Phase, string? TargetVersion, DateTimeOffset StartedUtc);
     private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan NpxReadyTimeout = TimeSpan.FromSeconds(120);
     private static readonly TimeSpan SourceReadyTimeout = TimeSpan.FromSeconds(180); // tsx 冷启动实测 90-150s
     private const string ManagedPackageName = "@deepseek-ai/dsh";
-    private const string ManagedPnpmSpec = "pnpm@11.19.0";
+    // pnpm 11.25 修复了安装时错误改写 allowBuilds 的问题。
+    private const string ManagedPnpmSpec = "pnpm@11.25.0";
 
     private readonly Uri _baseUri;
     private Uri _activeBaseUri;
@@ -45,11 +48,15 @@ public sealed class DshServiceManager : IDisposable
     private readonly string? _sourcePath;
     private readonly string _logPath;
     private readonly string _packageDirectory;
+    private readonly string _runtimeStagingDirectory;
+    private readonly string _runtimePreviousDirectory;
+    private readonly string _runtimeTransactionPath;
     private readonly string _packageToolsDirectory;
     private readonly string _dshHomeDirectory;
     private string? _runtimeBackupDirectory;
     private readonly string _bundledShortcutPluginDirectory;
     private readonly SemaphoreSlim _startLock = new(1, 1);
+    private readonly SemaphoreSlim _profileEditLock = new(1, 1);
     private Process? _process;
     private bool _intentionalStop;
     private bool _disposed;
@@ -64,6 +71,9 @@ public sealed class DshServiceManager : IDisposable
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DSHSharp");
         _logPath = Path.Combine(dir, "dsh-service.log");
         _packageDirectory = Path.Combine(dir, "dsh-runtime");
+        _runtimeStagingDirectory = Path.Combine(dir, "dsh-runtime-staging");
+        _runtimePreviousDirectory = Path.Combine(dir, "dsh-runtime-previous");
+        _runtimeTransactionPath = Path.Combine(dir, "dsh-runtime-transaction.json");
         _packageToolsDirectory = Path.Combine(_packageDirectory, ".tools");
         _dshHomeDirectory = Path.Combine(dir, "dsh-home");
         _bundledShortcutPluginDirectory = Path.Combine(AppContext.BaseDirectory, "Plugins", "dsh-sharp-session");
@@ -83,6 +93,25 @@ public sealed class DshServiceManager : IDisposable
 
     /// <summary>最近一次 Runtime 更新留下的可恢复快照目录。</summary>
     public bool CanRollbackRuntime => !string.IsNullOrEmpty(_runtimeBackupDirectory) && Directory.Exists(_runtimeBackupDirectory);
+
+    /// <summary>提交已通过健康检查的 Runtime 更新并清理旧版本。</summary>
+    public bool CommitRuntimeUpdate()
+    {
+        if (!CanRollbackRuntime)
+        {
+            return false;
+        }
+
+        if (!TryDeleteDirectory(_runtimeBackupDirectory!) || Directory.Exists(_runtimeBackupDirectory))
+        {
+            LastError = WithLogTail("Runtime 更新已验证，但无法清理上一版本目录；将保留回滚状态");
+            return false;
+        }
+        _runtimeBackupDirectory = null;
+        ClearRuntimeTransaction();
+        Log?.Invoke("private DSH Runtime update committed");
+        return true;
+    }
 
     /// <summary>是否持有托管进程（仅本客户端拉起的服务）。</summary>
     public bool IsOwned => _process is { HasExited: false };
@@ -123,10 +152,10 @@ public sealed class DshServiceManager : IDisposable
     }
 
     public Task<bool> SetPluginActiveAsync(string name, bool active, CancellationToken ct = default)
-        => RunProfilePackageEditAsync(name, active ? "activate" : "deactivate", ct);
+        => RunSerializedProfilePackageEditAsync(name, active ? "activate" : "deactivate", ct);
 
     public Task<bool> RemovePluginAsync(string name, CancellationToken ct = default)
-        => RunProfilePackageEditAsync(name, "remove", ct);
+        => RunSerializedProfilePackageEditAsync(name, "remove", ct);
 
     /// <summary>托管进程意外退出时触发（服务崩溃）。</summary>
     public event EventHandler? ProcessExitedUnexpectedly;
@@ -187,6 +216,7 @@ public sealed class DshServiceManager : IDisposable
                 return false;
             }
 
+            RecoverRuntimeUpdate();
             Directory.CreateDirectory(_dshHomeDirectory);
             if (!await EnsurePrivatePackageAsync(forceUpdate: false, ct) ||
                 !await EnsureBundledPluginsAsync(ct))
@@ -245,6 +275,12 @@ public sealed class DshServiceManager : IDisposable
             Log?.Invoke($"managed start failed: {LastError}");
             return false;
         }
+        catch (OperationCanceledException)
+        {
+            // 取消发生在已拉起进程后时，不能把孤儿 Runtime 留在后台。
+            KillOwnedProcess();
+            throw;
+        }
         finally
         {
             _startLock.Release();
@@ -271,22 +307,51 @@ public sealed class DshServiceManager : IDisposable
                 return false;
             }
 
+            if (!DshSharpCompatibility.IsCompatible(targetVersion))
+            {
+                LastError = $"DSH Runtime 更新已阻止：目标版本 {targetVersion ?? "未知"} 不在支持范围 {DshSharpCompatibility.SupportedRange} 内";
+                return false;
+            }
+
+            var backup = _runtimePreviousDirectory;
+            if (!TryDeleteDirectory(_runtimeStagingDirectory) || Directory.Exists(_runtimeStagingDirectory) ||
+                !TryDeleteDirectory(backup) || Directory.Exists(backup))
+            {
+                LastError = WithLogTail("无法清理上一次 Runtime 更新残留目录，请关闭占用文件后重试");
+                return false;
+            }
+            var hadActiveRuntime = Directory.Exists(_packageDirectory);
+            if (!await InstallRuntimeIntoAsync(_runtimeStagingDirectory, targetVersion, ct))
+            {
+                TryDeleteDirectory(_runtimeStagingDirectory);
+                return false;
+            }
+
+            WriteRuntimeTransaction("Prepared", targetVersion);
             KillOwnedProcess();
-            var backup = Path.Combine(Path.GetDirectoryName(_packageDirectory) ?? _packageDirectory, "dsh-runtime-previous");
-            TryDeleteDirectory(backup);
-            if (Directory.Exists(_packageDirectory))
+            try
             {
-                CopyDirectory(_packageDirectory, backup);
-                _runtimeBackupDirectory = backup;
-            }
+                if (Directory.Exists(_packageDirectory))
+                {
+                    Directory.Move(_packageDirectory, backup);
+                    _runtimeBackupDirectory = backup;
+                    WriteRuntimeTransaction("ActiveMoved", targetVersion);
+                }
 
-            var updated = await EnsurePrivatePackageAsync(forceUpdate: true, ct: ct, targetVersion: targetVersion);
-            if (!updated && CanRollbackRuntime)
+                Directory.Move(_runtimeStagingDirectory, _packageDirectory);
+                WriteRuntimeTransaction("Promoted", targetVersion);
+                if (!hadActiveRuntime)
+                    ClearRuntimeTransaction();
+                LastError = null;
+                Log?.Invoke($"private DSH Runtime staged and promoted, version={InstalledPackageVersion ?? "unknown"}");
+                return true;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                RollbackRuntime();
+                LastError = WithLogTail($"Runtime 目录切换失败：{ex.Message}");
+                RestoreRuntimeDirectories(forceRollback: Directory.Exists(_runtimePreviousDirectory));
+                return false;
             }
-
-            return updated;
         }
         finally
         {
@@ -304,11 +369,28 @@ public sealed class DshServiceManager : IDisposable
 
         KillOwnedProcess();
         var failed = _packageDirectory + ".failed";
-        TryDeleteDirectory(failed);
-        Directory.Move(_packageDirectory, failed);
-        Directory.Move(_runtimeBackupDirectory!, _packageDirectory);
-        TryDeleteDirectory(failed);
+        try
+        {
+            if (!TryDeleteDirectory(failed) || Directory.Exists(failed))
+            {
+                LastError = WithLogTail("Runtime 回滚失败：无法清理失败版本目录");
+                return false;
+            }
+            if (Directory.Exists(_packageDirectory)) Directory.Move(_packageDirectory, failed);
+            Directory.Move(_runtimeBackupDirectory!, _packageDirectory);
+            if (!TryDeleteDirectory(failed) || Directory.Exists(failed))
+            {
+                LastError = WithLogTail("Runtime 已恢复，但无法清理失败版本目录；请关闭占用文件后重试");
+                return false;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            LastError = WithLogTail($"Runtime 回滚失败：{ex.Message}");
+            return false;
+        }
         _runtimeBackupDirectory = null;
+        ClearRuntimeTransaction();
         LastError = null;
         Log?.Invoke("private DSH Runtime rolled back");
         return true;
@@ -321,6 +403,7 @@ public sealed class DshServiceManager : IDisposable
         _intentionalStop = true;
         KillOwnedProcess();
         _startLock.Dispose();
+        _profileEditLock.Dispose();
     }
 
     private void OnProcessExited(object? sender, EventArgs e)
@@ -385,22 +468,195 @@ public sealed class DshServiceManager : IDisposable
         }
     }
 
-    private static void CopyDirectory(string source, string destination)
+    private void WriteRuntimeTransaction(string phase, string? targetVersion)
     {
-        Directory.CreateDirectory(destination);
-        foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+        var transaction = new RuntimeUpdateTransaction(phase, targetVersion, DateTimeOffset.UtcNow);
+        var tempPath = _runtimeTransactionPath + ".tmp";
+        Directory.CreateDirectory(Path.GetDirectoryName(_runtimeTransactionPath)!);
+        File.WriteAllText(tempPath, JsonSerializer.Serialize(transaction, new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+        try
         {
-            var target = Path.Combine(destination, Path.GetRelativePath(source, file));
-            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-            File.Copy(file, target, overwrite: true);
+            if (File.Exists(_runtimeTransactionPath))
+                File.Replace(tempPath, _runtimeTransactionPath, null);
+            else
+                File.Move(tempPath, _runtimeTransactionPath);
+        }
+        finally
+        {
+            TryDeleteFile(tempPath);
         }
     }
 
-    private static void TryDeleteDirectory(string path)
+    private void RecoverRuntimeUpdate()
     {
-        try { if (Directory.Exists(path)) Directory.Delete(path, recursive: true); }
+        if (!File.Exists(_runtimeTransactionPath))
+        {
+            return;
+        }
+
+        RuntimeUpdateTransaction? transaction;
+        try
+        {
+            transaction = JsonSerializer.Deserialize<RuntimeUpdateTransaction>(File.ReadAllText(_runtimeTransactionPath));
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
+        {
+            Log?.Invoke($"Runtime 事务记录损坏，将保留目录并尝试恢复：{ex.Message}");
+            transaction = null;
+        }
+
+        try
+        {
+            switch (transaction?.Phase)
+            {
+                case "Prepared":
+                    RecoverPreparedTransaction();
+                    break;
+                case "ActiveMoved":
+                    RecoverActiveMovedTransaction(transaction!);
+                    break;
+                case "Promoted":
+                    RecoverPromotedTransaction();
+                    break;
+                default:
+                    RestoreRuntimeDirectories();
+                    break;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            LastError = WithLogTail($"Runtime 更新恢复失败：{ex.Message}");
+            Log?.Invoke(LastError);
+        }
+    }
+
+    private void RecoverPreparedTransaction()
+    {
+        if (!Directory.Exists(_packageDirectory) && Directory.Exists(_runtimePreviousDirectory))
+        {
+            Directory.Move(_runtimePreviousDirectory, _packageDirectory);
+        }
+        else if (!Directory.Exists(_packageDirectory) && !Directory.Exists(_runtimePreviousDirectory) &&
+                 Directory.Exists(_runtimeStagingDirectory))
+        {
+            Directory.Move(_runtimeStagingDirectory, _packageDirectory);
+        }
+
+        if (!Directory.Exists(_packageDirectory) ||
+            !TryDeleteDirectory(_runtimeStagingDirectory) || Directory.Exists(_runtimeStagingDirectory))
+        {
+            LastError = "Runtime 更新中断，且无法恢复到一致的目录状态";
+            return;
+        }
+
+        ClearRuntimeTransaction();
+    }
+
+    private void RecoverActiveMovedTransaction(RuntimeUpdateTransaction transaction)
+    {
+        if (Directory.Exists(_packageDirectory))
+        {
+            // 新目录已提升但进程在写入 Promoted 前退出；保留 previous 供健康检查回滚。
+            if (Directory.Exists(_runtimePreviousDirectory))
+            {
+                _runtimeBackupDirectory = _runtimePreviousDirectory;
+                WriteRuntimeTransaction("Promoted", transaction.TargetVersion);
+            }
+            else
+            {
+                ClearRuntimeTransaction();
+            }
+            return;
+        }
+
+        RestoreRuntimeDirectories();
+    }
+
+    private void RecoverPromotedTransaction()
+    {
+        if (!Directory.Exists(_packageDirectory) && Directory.Exists(_runtimePreviousDirectory))
+        {
+            RestoreRuntimeDirectories();
+            return;
+        }
+
+        if (Directory.Exists(_packageDirectory) && Directory.Exists(_runtimePreviousDirectory))
+        {
+            _runtimeBackupDirectory = _runtimePreviousDirectory;
+            return;
+        }
+
+        if (!Directory.Exists(_packageDirectory) && Directory.Exists(_runtimeStagingDirectory))
+        {
+            Directory.Move(_runtimeStagingDirectory, _packageDirectory);
+        }
+
+        if (Directory.Exists(_packageDirectory))
+        {
+            ClearRuntimeTransaction();
+        }
+        else
+        {
+            LastError = "Runtime 更新中断，找不到可启动的版本目录";
+        }
+    }
+
+    private void RestoreRuntimeDirectories(bool forceRollback = false)
+    {
+        try
+        {
+            var failed = _packageDirectory + ".failed";
+            if (!TryDeleteDirectory(failed) || Directory.Exists(failed))
+            {
+                LastError = WithLogTail("Runtime 目录恢复失败：无法清理失败版本目录");
+                return;
+            }
+            if (forceRollback && Directory.Exists(_packageDirectory))
+            {
+                Directory.Move(_packageDirectory, failed);
+            }
+            if (!Directory.Exists(_packageDirectory) && Directory.Exists(_runtimePreviousDirectory))
+                Directory.Move(_runtimePreviousDirectory, _packageDirectory);
+            if ((!TryDeleteDirectory(failed) && Directory.Exists(failed)) ||
+                (!TryDeleteDirectory(_runtimeStagingDirectory) && Directory.Exists(_runtimeStagingDirectory)))
+            {
+                LastError = WithLogTail("Runtime 目录已恢复，但无法清理更新残留；将保留事务记录以便下次继续恢复");
+                return;
+            }
+            _runtimeBackupDirectory = null;
+            ClearRuntimeTransaction();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            LastError = WithLogTail($"Runtime 目录恢复失败：{ex.Message}");
+            Log?.Invoke(LastError);
+        }
+    }
+
+    private void ClearRuntimeTransaction() => TryDeleteFile(_runtimeTransactionPath);
+
+    private static void TryDeleteFile(string path)
+    {
+        try { if (File.Exists(path)) File.Delete(path); }
         catch (IOException) { }
         catch (UnauthorizedAccessException) { }
+    }
+
+    private static bool TryDeleteDirectory(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path)) Directory.Delete(path, recursive: true);
+            return !Directory.Exists(path);
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     private ProcessStartInfo BuildStartInfo(int port)
@@ -443,23 +699,45 @@ public sealed class DshServiceManager : IDisposable
     /// <summary>首次运行通过私有 pnpm 安装 latest 并固定版本；后续启动复用该版本。</summary>
     private async Task<bool> EnsurePrivatePackageAsync(bool forceUpdate, CancellationToken ct, string? targetVersion = null)
     {
-        if (!forceUpdate && File.Exists(PrivateDshEntryPath) && File.Exists(PrivatePnpmEntryPath) &&
+        if (!forceUpdate && HasCurrentRuntimeLayout(_packageDirectory) &&
+            File.Exists(PrivateDshEntryPath) && File.Exists(PrivatePnpmEntryPath) &&
             ReadInstalledPackageVersion() is not null)
         {
             return true;
         }
 
+        // 普通启动和布局迁移必须保留用户当前的 DSH 版本；只有显式更新操作
+        // 通过 targetVersion 改变它。首次安装才使用客户端验证过的默认版本。
+        var versionToInstall = ResolveRuntimeInstallVersion(targetVersion, ReadInstalledPackageVersion());
+        if (!DshSharpCompatibility.IsCompatible(versionToInstall))
+        {
+            LastError = $"DSH Runtime 安装已阻止：目标版本 {versionToInstall} 不在支持范围 {DshSharpCompatibility.SupportedRange} 内";
+            return false;
+        }
+
         Directory.CreateDirectory(_packageDirectory);
         Directory.CreateDirectory(_packageToolsDirectory);
         WritePrivatePnpmManifest();
+        WritePrivatePnpmConfig(_packageDirectory);
         AppendLog(forceUpdate
             ? "--- updating private DSH package ---"
             : "--- installing private DSH package ---");
 
         try
         {
-            if (!File.Exists(PrivatePnpmEntryPath))
+            if (!forceUpdate && !HasCurrentRuntimeLayout(_packageDirectory) &&
+                Directory.Exists(Path.Combine(_packageDirectory, "node_modules")))
             {
+                TryDeleteDirectory(Path.Combine(_packageDirectory, "node_modules"));
+            }
+
+            if (!HasExpectedPrivatePnpm(_packageToolsDirectory))
+            {
+                if (!TryDeleteDirectory(Path.Combine(_packageToolsDirectory, "node_modules")))
+                {
+                    LastError = WithLogTail("无法替换私有 pnpm；请关闭占用文件后重试");
+                    return false;
+                }
                 AppendLog("bootstrapping private pnpm");
                 var bootstrapExitCode = await RunInstallProcessAsync(BuildPnpmBootstrapStartInfo(), ct);
                 if (bootstrapExitCode != 0 || !File.Exists(PrivatePnpmEntryPath))
@@ -470,8 +748,13 @@ public sealed class DshServiceManager : IDisposable
             }
 
             WritePrivatePnpmWorkspaceConfig();
+            if (!File.Exists(PrivateDshEntryPath) && Directory.Exists(Path.Combine(_packageDirectory, "node_modules")))
+            {
+                // 旧版本可能留下指向已移动目录的 .modules.yaml，先清理依赖布局再重装。
+                TryDeleteDirectory(Path.Combine(_packageDirectory, "node_modules"));
+            }
             AppendLog(forceUpdate ? "updating DSH with private pnpm" : "installing DSH with private pnpm");
-            var installExitCode = await RunInstallProcessAsync(BuildDshInstallStartInfo(targetVersion), ct);
+            var installExitCode = await RunInstallProcessAsync(BuildDshInstallStartInfo(versionToInstall), ct);
             if (installExitCode != 0 || !File.Exists(PrivateDshEntryPath))
             {
                 LastError = WithLogTail($"DSH 官方包安装失败（pnpm 退出码 {installExitCode}）");
@@ -479,8 +762,57 @@ public sealed class DshServiceManager : IDisposable
             }
 
             var version = ReadInstalledPackageVersion();
+            File.WriteAllText(RuntimeLayoutMarkerPath(_packageDirectory), "3\n", new UTF8Encoding(false));
             LastError = null;
             Log?.Invoke($"private DSH package ready, version={version ?? "unknown"}");
+            return true;
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or IOException)
+        {
+            LastError = WithLogTail($"DSH 官方包安装失败：{ex.Message}");
+            return false;
+        }
+    }
+
+    private async Task<bool> InstallRuntimeIntoAsync(string runtimeDirectory, string? targetVersion, CancellationToken ct)
+    {
+        if (!DshSharpCompatibility.IsCompatible(targetVersion))
+        {
+            LastError = $"DSH Runtime 安装已阻止：目标版本 {targetVersion ?? "未知"} 不在支持范围 {DshSharpCompatibility.SupportedRange} 内";
+            return false;
+        }
+
+        var toolsDirectory = Path.Combine(runtimeDirectory, ".tools");
+        Directory.CreateDirectory(runtimeDirectory);
+        Directory.CreateDirectory(toolsDirectory);
+        WritePrivatePnpmManifest(toolsDirectory);
+        WritePrivatePnpmConfig(runtimeDirectory);
+        try
+        {
+            var pnpmEntry = Path.Combine(toolsDirectory, "node_modules", "pnpm", "bin", "pnpm.cjs");
+            if (!HasExpectedPrivatePnpm(toolsDirectory))
+            {
+                if (!TryDeleteDirectory(Path.Combine(toolsDirectory, "node_modules")))
+                {
+                    LastError = WithLogTail("无法替换暂存 Runtime 的私有 pnpm");
+                    return false;
+                }
+                if (await RunInstallProcessAsync(BuildPnpmBootstrapStartInfo(toolsDirectory), ct) != 0 || !File.Exists(pnpmEntry))
+                {
+                    LastError = WithLogTail("私有 pnpm 安装失败");
+                    return false;
+                }
+            }
+
+            WritePrivatePnpmWorkspaceConfig(runtimeDirectory);
+            if (await RunInstallProcessAsync(BuildDshInstallStartInfo(runtimeDirectory, toolsDirectory, targetVersion), ct) != 0 ||
+                !IsRuntimeDirectoryComplete(runtimeDirectory))
+            {
+                LastError = WithLogTail("DSH 官方包安装失败或 Runtime 不完整");
+                return false;
+            }
+
+            File.WriteAllText(RuntimeLayoutMarkerPath(runtimeDirectory), "3\n", new UTF8Encoding(false));
             return true;
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or IOException)
@@ -637,6 +969,19 @@ public sealed class DshServiceManager : IDisposable
         }
     }
 
+    private async Task<bool> RunSerializedProfilePackageEditAsync(string name, string action, CancellationToken ct)
+    {
+        await _profileEditLock.WaitAsync(ct);
+        try
+        {
+            return await RunProfilePackageEditAsync(name, action, ct);
+        }
+        finally
+        {
+            _profileEditLock.Release();
+        }
+    }
+
     private async Task<bool> RunProfilePackageEditAsync(string name, string action, CancellationToken ct)
     {
         var profileManifest = GetWebProfileManifestPath();
@@ -671,11 +1016,14 @@ public sealed class DshServiceManager : IDisposable
                         if (string.Equals(bundles[i]?.GetValue<string>(), name, StringComparison.Ordinal)) bundles.RemoveAt(i);
                 }
                 profile["bundles"] = bundles; dsh["profile"] = profile; root["dsh"] = dsh;
-                await File.WriteAllTextAsync(profileManifest, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), ct);
+                await WriteTextAtomicallyAsync(
+                    profileManifest,
+                    root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }),
+                    ct);
 
                 if (!await VerifyProfileCompositionAsync(ct))
                 {
-                    await File.WriteAllTextAsync(profileManifest, originalManifest, ct);
+                    await WriteTextAtomicallyAsync(profileManifest, originalManifest, ct);
                     LastError = WithLogTail("插件状态未保存：DSH 无法组合此插件配置，已自动恢复原设置");
                     Log?.Invoke($"plugin configuration rolled back: {name}");
                     return false;
@@ -710,6 +1058,23 @@ public sealed class DshServiceManager : IDisposable
         catch (Exception ex) when (ex is IOException or System.ComponentModel.Win32Exception)
         {
             LastError = $"插件卸载失败：{ex.Message}"; return false;
+        }
+    }
+
+    private static async Task WriteTextAtomicallyAsync(string path, string content, CancellationToken ct)
+    {
+        var tempPath = path + ".tmp";
+        await File.WriteAllTextAsync(tempPath, content, new UTF8Encoding(false), ct);
+        try
+        {
+            if (File.Exists(path))
+                File.Replace(tempPath, path, null);
+            else
+                File.Move(tempPath, path);
+        }
+        finally
+        {
+            TryDeleteFile(tempPath);
         }
     }
 
@@ -813,6 +1178,13 @@ public sealed class DshServiceManager : IDisposable
         }
     }
 
+    /// <summary>检查 Runtime 暂存目录是否具备可启动的最小文件集。</summary>
+    public static bool IsRuntimeDirectoryComplete(string runtimeDirectory)
+    {
+        var entry = Path.Combine(runtimeDirectory, "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js");
+        return File.Exists(entry) && ReadInstalledPackageVersion(runtimeDirectory) is not null;
+    }
+
     private string PrivateDshEntryPath => Path.Combine(
         _packageDirectory,
         "node_modules",
@@ -828,16 +1200,55 @@ public sealed class DshServiceManager : IDisposable
         "bin",
         "pnpm.cjs");
 
+    private static string RuntimeLayoutMarkerPath(string runtimeDirectory) =>
+        Path.Combine(runtimeDirectory, ".dshsharp-runtime-layout-v2");
+
+    private static bool HasCurrentRuntimeLayout(string runtimeDirectory)
+    {
+        try
+        {
+            return string.Equals(
+                File.ReadAllText(RuntimeLayoutMarkerPath(runtimeDirectory)).Trim(),
+                "3",
+                StringComparison.Ordinal);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private static bool HasExpectedPrivatePnpm(string toolsDirectory)
+    {
+        var packagePath = Path.Combine(toolsDirectory, "node_modules", "pnpm", "package.json");
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(packagePath));
+            return document.RootElement.TryGetProperty("version", out var version) &&
+                string.Equals(version.GetString(), ManagedPnpmSpec["pnpm@".Length..], StringComparison.Ordinal);
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private static string ResolveRuntimeInstallVersion(string? requestedVersion, string? installedVersion)
+        => requestedVersion ?? installedVersion ?? DshSharpCompatibility.DefaultDshVersion;
+
     private static string CommandName(string name) => OperatingSystem.IsWindows() ? $"{name}.cmd" : name;
 
     private ProcessStartInfo BuildPnpmBootstrapStartInfo()
+        => BuildPnpmBootstrapStartInfo(_packageToolsDirectory);
+
+    private ProcessStartInfo BuildPnpmBootstrapStartInfo(string toolsDirectory)
     {
         var startInfo = new ProcessStartInfo
         {
             FileName = OperatingSystem.IsWindows()
                 ? Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe"
                 : "npm",
-            WorkingDirectory = _packageToolsDirectory,
+            WorkingDirectory = toolsDirectory,
             UseShellExecute = false,
             CreateNoWindow = true,
             RedirectStandardOutput = true,
@@ -862,20 +1273,23 @@ public sealed class DshServiceManager : IDisposable
     }
 
     private ProcessStartInfo BuildDshInstallStartInfo(string? targetVersion = null)
+        => BuildDshInstallStartInfo(_packageDirectory, _packageToolsDirectory, targetVersion);
+
+    private ProcessStartInfo BuildDshInstallStartInfo(string runtimeDirectory, string toolsDirectory, string? targetVersion = null)
     {
         var startInfo = new ProcessStartInfo
         {
             FileName = "node",
-            WorkingDirectory = _packageDirectory,
+            WorkingDirectory = runtimeDirectory,
             UseShellExecute = false,
             CreateNoWindow = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
         };
-        startInfo.ArgumentList.Add(PrivatePnpmEntryPath);
+        startInfo.ArgumentList.Add(Path.Combine(toolsDirectory, "node_modules", "pnpm", "bin", "pnpm.cjs"));
         startInfo.ArgumentList.Add("add");
         startInfo.ArgumentList.Add("--save-exact");
-        startInfo.ArgumentList.Add($"{ManagedPackageName}@{targetVersion ?? "latest"}");
+        startInfo.ArgumentList.Add($"{ManagedPackageName}@{targetVersion ?? DshSharpCompatibility.DefaultDshVersion}");
         return startInfo;
     }
 
@@ -888,13 +1302,35 @@ public sealed class DshServiceManager : IDisposable
         }
 
         PumpOutput(process);
-        await process.WaitForExitAsync(ct);
+        try
+        {
+            await process.WaitForExitAsync(ct);
+        }
+        catch (OperationCanceledException)
+        {
+            // 安装工具也会派生 node/npm 子进程；取消不能留下它们继续改写 Runtime 目录。
+            try
+            {
+                if (!process.HasExited)
+                    process.Kill(entireProcessTree: true);
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+            {
+                Log?.Invoke($"kill install process failed: {ex.Message}");
+            }
+            throw;
+        }
         return process.ExitCode;
     }
 
     private void WritePrivatePnpmWorkspaceConfig()
+        => WritePrivatePnpmWorkspaceConfig(_packageDirectory);
+
+    private static void WritePrivatePnpmWorkspaceConfig(string runtimeDirectory)
     {
         const string config = """
+            # pnpm 11 仅从 workspace 配置读取 nodeLinker；.npmrc 中同名设置会被忽略。
+            nodeLinker: hoisted
             allowBuilds:
               esbuild: true
               node-pty: true
@@ -902,14 +1338,29 @@ public sealed class DshServiceManager : IDisposable
               '@google/genai': false
               protobufjs: false
               node-addon-require-builtin: false
+              '@deepseek-ai/dsh-subprocess-local': true
             """;
         File.WriteAllText(
-            Path.Combine(_packageDirectory, "pnpm-workspace.yaml"),
+            Path.Combine(runtimeDirectory, "pnpm-workspace.yaml"),
             config + Environment.NewLine,
             new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
     }
 
+    private static void WritePrivatePnpmConfig(string runtimeDirectory)
+    {
+        // pnpm 11 的非认证配置必须在 pnpm-workspace.yaml 中；保留空 .npmrc，
+        // 避免旧 Runtime 中遗留的无效 node-linker 设置造成误解。
+        const string config = "# DSH-Sharp Runtime npm configuration\n";
+        File.WriteAllText(
+            Path.Combine(runtimeDirectory, ".npmrc"),
+            config,
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+    }
+
     private void WritePrivatePnpmManifest()
+        => WritePrivatePnpmManifest(_packageToolsDirectory);
+
+    private static void WritePrivatePnpmManifest(string toolsDirectory)
     {
         const string manifest = """
             {
@@ -918,15 +1369,18 @@ public sealed class DshServiceManager : IDisposable
             }
             """;
         File.WriteAllText(
-            Path.Combine(_packageToolsDirectory, "package.json"),
+            Path.Combine(toolsDirectory, "package.json"),
             manifest + Environment.NewLine,
             new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
     }
 
     private string? ReadInstalledPackageVersion()
+        => ReadInstalledPackageVersion(_packageDirectory);
+
+    private static string? ReadInstalledPackageVersion(string runtimeDirectory)
     {
         var packageJson = Path.Combine(
-            _packageDirectory, "node_modules", "@deepseek-ai", "dsh", "package.json");
+            runtimeDirectory, "node_modules", "@deepseek-ai", "dsh", "package.json");
         try
         {
             if (!File.Exists(packageJson))

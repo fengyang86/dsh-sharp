@@ -44,7 +44,7 @@
 | Avalonia | 12.1（Fluent 主题，`WindowDecorations` 自绘标题栏） |
 | 内嵌 WebView | [Avalonia.Controls.WebView](https://www.nuget.org/packages/Avalonia.Controls.WebView) 12.1（WebView2 / WebKit / WebKitGTK） |
 | MVVM | CommunityToolkit.Mvvm |
-| 单元测试 | xUnit（39 项）+ Vitest（8 项） |
+| 单元测试 | xUnit（55 项）+ Vitest（8 项） |
 
 ## 解决方案结构
 

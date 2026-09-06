@@ -1,6 +1,8 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Reflection;
+using System.Text.Json;
 using DSHSharp.Core.Dsh;
 
 namespace DSHSharp.Core.Tests;
@@ -214,6 +216,140 @@ public sealed class DshServiceManagerTests : IDisposable
     }
 
     [Fact]
+    public void IncompleteRuntimeDirectory_IsRejected()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "dshsharp-staging-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(dir, "node_modules", "@deepseek-ai", "dsh"));
+        File.WriteAllText(Path.Combine(dir, "node_modules", "@deepseek-ai", "dsh", "package.json"), "{\"version\":\"1.0.0\"}");
+        try
+        {
+            Assert.False(DshServiceManager.IsRuntimeDirectoryComplete(dir));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void RuntimeLayoutMigration_PreservesInstalledDshVersion()
+    {
+        var resolve = typeof(DshServiceManager).GetMethod(
+            "ResolveRuntimeInstallVersion",
+            BindingFlags.Static | BindingFlags.NonPublic);
+
+        var version = (string)resolve!.Invoke(null, [null, "0.1.0-rc.8"])!;
+
+        Assert.Equal("0.1.0-rc.8", version);
+    }
+
+    [Fact]
+    public void ExplicitRuntimeUpdate_UsesRequestedDshVersion()
+    {
+        var resolve = typeof(DshServiceManager).GetMethod(
+            "ResolveRuntimeInstallVersion",
+            BindingFlags.Static | BindingFlags.NonPublic);
+
+        var version = (string)resolve!.Invoke(null, ["0.1.1-rc.2", "0.1.0-rc.8"])!;
+
+        Assert.Equal("0.1.1-rc.2", version);
+    }
+
+    [Fact]
+    public void InterruptedDirectorySwap_IsRecoveredOnStartup()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "dshsharp-recovery-test-" + Guid.NewGuid().ToString("N"));
+        var previous = Path.Combine(dir, "dsh-runtime-previous");
+        Directory.CreateDirectory(Path.Combine(previous, "node_modules"));
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "dsh-runtime-transaction.json"),
+            JsonSerializer.Serialize(new { Phase = "ActiveMoved", TargetVersion = "1.0.0", StartedUtc = DateTimeOffset.UtcNow }));
+        try
+        {
+            using var manager = new DshServiceManager("http://127.0.0.1:1/", ManagedMode.Npx, null, dir);
+            var recover = typeof(DshServiceManager).GetMethod("RecoverRuntimeUpdate", BindingFlags.Instance | BindingFlags.NonPublic);
+            recover!.Invoke(manager, null);
+            Assert.True(Directory.Exists(Path.Combine(dir, "dsh-runtime")));
+            Assert.False(File.Exists(Path.Combine(dir, "dsh-runtime-transaction.json")));
+        }
+        finally
+        {
+            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void PreparedTransaction_WhenActiveWasMovedBeforePhasePersisted_RestoresPreviousRuntime()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "dshsharp-prepared-recovery-test-" + Guid.NewGuid().ToString("N"));
+        var previous = Path.Combine(dir, "dsh-runtime-previous");
+        var staging = Path.Combine(dir, "dsh-runtime-staging");
+        Directory.CreateDirectory(previous);
+        Directory.CreateDirectory(staging);
+        File.WriteAllText(Path.Combine(dir, "dsh-runtime-transaction.json"),
+            JsonSerializer.Serialize(new { Phase = "Prepared", TargetVersion = "0.1.1-rc.2", StartedUtc = DateTimeOffset.UtcNow }));
+        try
+        {
+            using var manager = new DshServiceManager("http://127.0.0.1:1/", ManagedMode.Npx, null, dir);
+
+            InvokeRuntimeRecovery(manager);
+
+            Assert.True(Directory.Exists(Path.Combine(dir, "dsh-runtime")));
+            Assert.False(Directory.Exists(previous));
+            Assert.False(Directory.Exists(staging));
+            Assert.False(File.Exists(Path.Combine(dir, "dsh-runtime-transaction.json")));
+        }
+        finally
+        {
+            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ActiveMovedTransaction_WhenNewRuntimeWasAlreadyPromoted_PreservesRollbackRuntime()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "dshsharp-active-moved-recovery-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(dir, "dsh-runtime"));
+        Directory.CreateDirectory(Path.Combine(dir, "dsh-runtime-previous"));
+        File.WriteAllText(Path.Combine(dir, "dsh-runtime-transaction.json"),
+            JsonSerializer.Serialize(new { Phase = "ActiveMoved", TargetVersion = "0.1.1-rc.2", StartedUtc = DateTimeOffset.UtcNow }));
+        try
+        {
+            using var manager = new DshServiceManager("http://127.0.0.1:1/", ManagedMode.Npx, null, dir);
+
+            InvokeRuntimeRecovery(manager);
+
+            Assert.True(manager.CanRollbackRuntime);
+            Assert.True(File.Exists(Path.Combine(dir, "dsh-runtime-transaction.json")));
+        }
+        finally
+        {
+            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void PromotedRuntimeTransaction_LeavesPreviousAvailableForRollback()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "dshsharp-promoted-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(dir, "dsh-runtime"));
+        Directory.CreateDirectory(Path.Combine(dir, "dsh-runtime-previous"));
+        File.WriteAllText(Path.Combine(dir, "dsh-runtime-transaction.json"),
+            JsonSerializer.Serialize(new { Phase = "Promoted", TargetVersion = "1.0.0", StartedUtc = DateTimeOffset.UtcNow }));
+        try
+        {
+            using var manager = new DshServiceManager("http://127.0.0.1:1/", ManagedMode.Npx, null, dir);
+            var recover = typeof(DshServiceManager).GetMethod("RecoverRuntimeUpdate", BindingFlags.Instance | BindingFlags.NonPublic);
+            recover!.Invoke(manager, null);
+            Assert.True(manager.CanRollbackRuntime);
+        }
+        finally
+        {
+            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void IsProfileDependencyCurrent_WhenLinkMatches_ReturnsTrue()
     {
         var manifest = WriteProfileManifest(
@@ -256,6 +392,12 @@ public sealed class DshServiceManagerTests : IDisposable
         var path = Path.Combine(Path.GetTempPath(), $"dshsharp-profile-{Guid.NewGuid():N}.json");
         File.WriteAllText(path, json);
         return path;
+    }
+
+    private static void InvokeRuntimeRecovery(DshServiceManager manager)
+    {
+        var recover = typeof(DshServiceManager).GetMethod("RecoverRuntimeUpdate", BindingFlags.Instance | BindingFlags.NonPublic);
+        recover!.Invoke(manager, null);
     }
 
     public void Dispose()
