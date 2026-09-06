@@ -17,7 +17,7 @@
 
 ## 1. 版本契约
 
-DSH-Sharp `0.2.0` 支持 DSH `>=0.1.0-rc.8 <0.2.0`，已验证 `0.1.0-rc.8` 和 `0.1.1-rc.2`。客户端版本、运行服务版本、私有安装版本和 npm 最新版本始终分开建模；更新边界由 `DSHSharp.Core.Compatibility.DshSharpCompatibility` 统一判断。详见 [versioning.md](versioning.md)。
+DSH-Sharp `0.2.1` 仅支持已验证的 DSH `0.1.0-rc.8` 和 `0.1.1-rc.2`。官方最新开发版本 `0.1.3-alpha.1` 包含 Session v2 与运行环境变更，暂不兼容。客户端版本、运行服务版本、私有安装版本和 npm 最新版本始终分开建模；更新边界由 `DSHSharp.Core.Compatibility.DshSharpCompatibility` 统一判断。详见 [versioning.md](versioning.md)。
 
 ## 2. 解决方案结构
 

@@ -3,17 +3,16 @@ namespace DSHSharp.Core.Compatibility;
 /// <summary>DSH-Sharp 与 DSH 的版本契约。</summary>
 public static class DshSharpCompatibility
 {
-    public const string ProductVersion = "0.2.0";
+    public const string ProductVersion = "0.2.1";
     public const string MinimumDshVersion = "0.1.0-rc.8";
-    public const string MaximumDshVersionExclusive = "0.2.0";
+    public const string MaximumDshVersionExclusive = "0.1.2";
     public const string DefaultDshVersion = "0.1.1-rc.2";
-    public const string SupportedRange = ">=0.1.0-rc.8 <0.2.0";
+    public const string SupportedRange = "verified: 0.1.0-rc.8, 0.1.1-rc.2";
     public static readonly IReadOnlyList<string> VerifiedDshVersions = ["0.1.0-rc.8", "0.1.1-rc.2"];
 
     public static bool IsCompatible(string? version)
         => SemVersion.TryParse(version, out var parsed)
-            && parsed.CompareTo(SemVersion.Parse(MinimumDshVersion)) >= 0
-            && parsed.CompareTo(SemVersion.Parse(MaximumDshVersionExclusive)) < 0;
+            && VerifiedDshVersions.Any(item => SemVersion.Parse(item).CompareTo(parsed) == 0);
 
     private readonly record struct SemVersion(int Major, int Minor, int Patch, string? Pre)
         : IComparable<SemVersion>
