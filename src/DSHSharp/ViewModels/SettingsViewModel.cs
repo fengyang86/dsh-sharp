@@ -425,6 +425,6 @@ public partial class SettingsViewModel : ViewModelBase
     public string AboutText =>
         "DSH-Sharp · DeepSeek Harness 桌面客户端\n" +
         $".NET 10 + Avalonia\n" +
-        $"客户端版本 {System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.2.0"}\n" +
+        $"客户端版本 {System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? DSHSharp.Core.Compatibility.DshSharpCompatibility.ProductVersion}\n" +
         "MIT License";
 }

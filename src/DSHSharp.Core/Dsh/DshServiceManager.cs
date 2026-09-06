@@ -86,7 +86,7 @@ public sealed class DshServiceManager : IDisposable
     public ManagedMode Mode => _mode;
 
     /// <summary>本次运行实际连接的地址。端口由托管进程成功绑定后确定。</summary>
-    public string ActiveBaseUrl => _activeBaseUri.GetLeftPart(UriPartial.Authority);
+    public string ActiveBaseUrl => _activeBaseUri.AbsoluteUri.TrimEnd('/');
 
     /// <summary>私有 DSH_HOME。会话、profile、插件和凭据不会与外部 DSH 共用。</summary>
     public string DshHomeDirectory => _dshHomeDirectory;
@@ -1445,11 +1445,25 @@ public sealed class DshServiceManager : IDisposable
             while (await reader.ReadLineAsync() is { } line)
             {
                 AppendLog(line);
+                CaptureReadyUrl(line);
             }
         }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException)
         {
             // 进程退出后管道关闭：正常。
+        }
+    }
+
+    private void CaptureReadyUrl(string line)
+    {
+        const string marker = "dsh web: ";
+        var index = line.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (index < 0) return;
+        var value = line[(index + marker.Length)..].Trim();
+        if (Uri.TryCreate(value, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https")
+        {
+            _activeBaseUri = uri;
+            Log?.Invoke($"captured private runtime URL: {uri}");
         }
     }
 
