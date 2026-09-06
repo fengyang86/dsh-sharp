@@ -88,30 +88,7 @@ public sealed class DshServiceManager : IDisposable
     public ManagedMode Mode => _mode;
 
     /// <summary>本次运行实际连接的地址。端口由托管进程成功绑定后确定。</summary>
-    public string ActiveBaseUrl
-    {
-        get
-        {
-            // 输出泵存在调度延迟；读取日志作为最终兜底，确保认证令牌不会丢失。
-            try
-            {
-                if (File.Exists(_logPath))
-                {
-                    foreach (var line in File.ReadLines(_logPath).Reverse())
-                    {
-                        const string marker = "dsh web: ";
-                        var index = line.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
-                        if (index < 0) continue;
-                        var value = line[(index + marker.Length)..].Trim();
-                        if (Uri.TryCreate(value, UriKind.Absolute, out var uri) && uri.Query.Contains("token=", StringComparison.Ordinal))
-                            return uri.AbsoluteUri.TrimEnd('/');
-                    }
-                }
-            }
-            catch (IOException) { }
-            return _activeBaseUri.AbsoluteUri.TrimEnd('/');
-        }
-    }
+    public string ActiveBaseUrl => _activeBaseUri.AbsoluteUri.TrimEnd('/');
 
     /// <summary>私有 DSH_HOME。会话、profile、插件和凭据不会与外部 DSH 共用。</summary>
     public string DshHomeDirectory => _dshHomeDirectory;
@@ -446,6 +423,8 @@ public sealed class DshServiceManager : IDisposable
         {
             return;
         }
+
+        _activeBaseUri = new UriBuilder(_baseUri) { Host = "127.0.0.1", Port = _baseUri.Port }.Uri;
 
         Log?.Invoke($"managed process exited, code={process.ExitCode}");
         AppendLog($"--- DSH service process exited, code={process.ExitCode} ---");
