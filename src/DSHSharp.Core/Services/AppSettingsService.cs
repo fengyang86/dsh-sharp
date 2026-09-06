@@ -80,6 +80,10 @@ public sealed class AppSettingsService
         public string Theme { get; init; } = "System";
         public bool SessionCompleteNotifications { get; init; }
         public bool NotificationSoundEnabled { get; init; }
+        public bool SessionPluginEscStopEnabled { get; init; } = true;
+        public bool SessionPluginCopyIdEnabled { get; init; } = true;
+        public bool SessionPluginOpenWorkspaceEnabled { get; init; } = true;
+        public bool SessionPluginTrayNavigationEnabled { get; init; } = true;
         public double? WindowLeft { get; init; }
         public double? WindowTop { get; init; }
         public double? WindowWidth { get; init; }
@@ -94,6 +98,10 @@ public sealed class AppSettingsService
             Theme = settings.Theme,
             SessionCompleteNotifications = settings.SessionCompleteNotifications,
             NotificationSoundEnabled = settings.NotificationSoundEnabled,
+            SessionPluginEscStopEnabled = settings.SessionPluginEscStopEnabled,
+            SessionPluginCopyIdEnabled = settings.SessionPluginCopyIdEnabled,
+            SessionPluginOpenWorkspaceEnabled = settings.SessionPluginOpenWorkspaceEnabled,
+            SessionPluginTrayNavigationEnabled = settings.SessionPluginTrayNavigationEnabled,
             WindowLeft = settings.WindowLeft,
             WindowTop = settings.WindowTop,
             WindowWidth = settings.WindowWidth,

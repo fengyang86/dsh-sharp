@@ -250,7 +250,13 @@ public partial class App : Application
         SetupDshMonitor();
         _apiClient = new DshApiClient(RuntimeBaseUrl);
         StartSessionRefresh();
-        _mainWindow?.ReloadWeb(RuntimeBaseUrl);
+        _mainWindow?.ReloadWeb(BuildPluginFeatureUrl(RuntimeBaseUrl));
+    }
+
+    private string BuildPluginFeatureUrl(string baseUrl)
+    {
+        var separator = baseUrl.Contains('?') ? '&' : '?';
+        return $"{baseUrl}{separator}dshsharp-esc-stop={(Settings.SessionPluginEscStopEnabled ? 1 : 0)}&dshsharp-copy-id={(Settings.SessionPluginCopyIdEnabled ? 1 : 0)}&dshsharp-open-workspace={(Settings.SessionPluginOpenWorkspaceEnabled ? 1 : 0)}&dshsharp-tray-navigation={(Settings.SessionPluginTrayNavigationEnabled ? 1 : 0)}";
     }
 
     /// <summary>打开设置窗口（已打开则激活）。</summary>
@@ -299,6 +305,10 @@ public partial class App : Application
         {
             ApplyTheme(updated.Theme);
         }
+        Settings.SessionPluginEscStopEnabled = updated.SessionPluginEscStopEnabled;
+        Settings.SessionPluginCopyIdEnabled = updated.SessionPluginCopyIdEnabled;
+        Settings.SessionPluginOpenWorkspaceEnabled = updated.SessionPluginOpenWorkspaceEnabled;
+        Settings.SessionPluginTrayNavigationEnabled = updated.SessionPluginTrayNavigationEnabled;
 
         Settings = updated;
         try

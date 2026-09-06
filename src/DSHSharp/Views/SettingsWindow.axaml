@@ -102,6 +102,13 @@
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
+                    <TextBlock Text="内置会话插件功能" FontWeight="SemiBold" Margin="0,8,0,0"/>
+                    <TextBlock Text="这些开关控制 DSH-Sharp 内置会话增强功能；修改后需重启 DSH 服务生效。"
+                               FontSize="12" TextWrapping="Wrap" Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+                    <ToggleSwitch Content="Esc 停止当前会话" IsChecked="{Binding SessionPluginEscStopEnabled}"/>
+                    <ToggleSwitch Content="会话右键复制会话 ID" IsChecked="{Binding SessionPluginCopyIdEnabled}"/>
+                    <ToggleSwitch Content="工作区右键在资源管理器中打开" IsChecked="{Binding SessionPluginOpenWorkspaceEnabled}"/>
+                    <ToggleSwitch Content="托盘最近会话跳转" IsChecked="{Binding SessionPluginTrayNavigationEnabled}"/>
                 </StackPanel>
 
                 <!-- ===== 面板：通用 ===== -->

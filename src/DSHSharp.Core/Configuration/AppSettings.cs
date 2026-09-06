@@ -45,6 +45,12 @@ public sealed class AppSettings
     /// <summary>会话完成通知附带提示音。</summary>
     public bool NotificationSoundEnabled { get; set; } = true;
 
+    /// <summary>内置会话插件功能开关。</summary>
+    public bool SessionPluginEscStopEnabled { get; set; } = true;
+    public bool SessionPluginCopyIdEnabled { get; set; } = true;
+    public bool SessionPluginOpenWorkspaceEnabled { get; set; } = true;
+    public bool SessionPluginTrayNavigationEnabled { get; set; } = true;
+
     /// <summary>
     /// 旧版托管模式字段。仅用于读取和迁移历史 settings.json。
     /// </summary>

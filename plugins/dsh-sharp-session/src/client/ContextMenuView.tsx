@@ -14,7 +14,7 @@ const OPEN_WORKSPACE_ITEM = {
  * 当前 DSH 没有行级菜单贡献插槽，因此只通过官方行的语义 ARIA 属性定位。
  */
 export function ContextMenuView({
-  useStore, actions, openWorkspace, getSessionSnapshot, getWorkspaceItems,
+  useStore, actions, openWorkspace, getSessionSnapshot, getWorkspaceItems, features,
 }) {
   const menu = useStore(state => state)
   const actionsRef = useRef(actions)
@@ -26,7 +26,7 @@ export function ContextMenuView({
       if (!(target instanceof Element)) return
 
       const workspaceRow = target.closest('[role="treeitem"][aria-expanded]')
-      if (workspaceRow instanceof HTMLElement) {
+      if (workspaceRow instanceof HTMLElement && features.openWorkspace) {
         // DSH 当前没有向插件暴露工作区行 ID。仅在目录名唯一匹配时启用，
         // 同名目录宁可不展示菜单，也不能打开错误的工作区。
         const label = workspaceRow.textContent?.trim() ?? ''
@@ -40,7 +40,7 @@ export function ContextMenuView({
       }
 
       const sessionRow = target.closest('[role="treeitem"][aria-selected]')
-      if (!(sessionRow instanceof HTMLElement)) return
+      if (!(sessionRow instanceof HTMLElement) || !features.copyId) return
       // 官方行没有将 sessionId 写入 DOM。右键未选中行时先复用它的官方点击，
       // 再从 sessions 服务读取刚刚选中的准确 ID，避免按标题猜测同名会话。
       if (sessionRow.getAttribute('aria-selected') !== 'true') sessionRow.click()

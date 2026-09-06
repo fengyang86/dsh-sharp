@@ -1,4 +1,4 @@
-import { installSessionNavigation, installSessionShortcuts, type ShortcutSessions } from './shortcut.ts'
+import { installSessionNavigation, installSessionShortcuts, readFeatureFlags, type ShortcutSessions } from './shortcut.ts'
 import { ContextMenuView } from './ContextMenuView.tsx'
 import { createMenuStore } from './menu-store.ts'
 
@@ -18,12 +18,13 @@ export const inject = ['slots', 'sessions', 'workspaces']
  * @param ctx DSH 浏览器客户端上下文。
  */
 export function apply(ctx: ShortcutContext): void {
+  const features = readFeatureFlags()
   ctx.effect(
-    () => installSessionShortcuts(ctx.sessions),
+    () => features.escStop ? installSessionShortcuts(ctx.sessions) : () => {},
     'dsh-sharp-session: document keyboard listener',
   )
   ctx.effect(
-    () => installSessionNavigation(ctx.sessions),
+    () => features.trayNavigation ? installSessionNavigation(ctx.sessions) : () => {},
     'dsh-sharp-session: tray session navigation',
   )
   ctx.slots.inject('shell.overlay', () => ctx.slots.register(
@@ -34,6 +35,7 @@ export function apply(ctx: ShortcutContext): void {
       store: createMenuStore(),
       inject: () => ({
         openWorkspace: (path: string) => ctx.workspaces.openPath(path),
+        features,
         getSessionSnapshot: () => ctx.sessions.list.getSnapshot(),
         getWorkspaceItems: () => ctx.workspaces.list.getSnapshot().items,
       }),

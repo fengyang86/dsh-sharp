@@ -147,6 +147,10 @@ public partial class SettingsViewModel : ViewModelBase
         StartMinimized = settings.StartMinimized;
         SessionCompleteNotifications = settings.SessionCompleteNotifications;
         NotificationSoundEnabled = settings.NotificationSoundEnabled;
+        SessionPluginEscStopEnabled = settings.SessionPluginEscStopEnabled;
+        SessionPluginCopyIdEnabled = settings.SessionPluginCopyIdEnabled;
+        SessionPluginOpenWorkspaceEnabled = settings.SessionPluginOpenWorkspaceEnabled;
+        SessionPluginTrayNavigationEnabled = settings.SessionPluginTrayNavigationEnabled;
         Theme = settings.Theme;
 
         ProfileHelper.EnsureDefaultProfile(settings);
@@ -188,6 +192,11 @@ public partial class SettingsViewModel : ViewModelBase
 
     [ObservableProperty]
     private bool _showPlugins;
+
+    [ObservableProperty] private bool _sessionPluginEscStopEnabled;
+    [ObservableProperty] private bool _sessionPluginCopyIdEnabled;
+    [ObservableProperty] private bool _sessionPluginOpenWorkspaceEnabled;
+    [ObservableProperty] private bool _sessionPluginTrayNavigationEnabled;
 
     [ObservableProperty]
     private bool _showVersion;

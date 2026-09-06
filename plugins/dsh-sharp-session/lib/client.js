@@ -9,6 +9,16 @@ window.__ModuleLoader__.load({
 		let react_jsx_runtime = require("react/jsx-runtime");
 		let _deepseek_ai_dsh_client_runtime_client = require("@deepseek-ai/dsh-client-runtime/client");
 		//#region src/client/shortcut.ts
+		function readFeatureFlags(locationLike = window.location) {
+			const query = new URLSearchParams(locationLike.search);
+			const enabled = (name) => query.get(`dshsharp-${name}`) !== "0";
+			return {
+				escStop: enabled("esc-stop"),
+				copyId: enabled("copy-id"),
+				openWorkspace: enabled("open-workspace"),
+				trayNavigation: enabled("tray-navigation")
+			};
+		}
 		/** 处理桌面托盘传入的会话地址，并交给 DSH 官方 sessions.open。 */
 		function installSessionNavigation(sessions) {
 			const openFromHash = () => {
@@ -78,7 +88,7 @@ window.__ModuleLoader__.load({
 		* 复用 DSH 官方 Menu、sessions 和 workspaces 服务提供会话域右键动作。
 		* 当前 DSH 没有行级菜单贡献插槽，因此只通过官方行的语义 ARIA 属性定位。
 		*/
-		function ContextMenuView({ useStore, actions, openWorkspace, getSessionSnapshot, getWorkspaceItems }) {
+		function ContextMenuView({ useStore, actions, openWorkspace, getSessionSnapshot, getWorkspaceItems, features }) {
 			const menu = useStore((state) => state);
 			const actionsRef = (0, react.useRef)(actions);
 			actionsRef.current = actions;
@@ -87,7 +97,7 @@ window.__ModuleLoader__.load({
 					const target = event.target;
 					if (!(target instanceof Element)) return;
 					const workspaceRow = target.closest("[role=\"treeitem\"][aria-expanded]");
-					if (workspaceRow instanceof HTMLElement) {
+					if (workspaceRow instanceof HTMLElement && features.openWorkspace) {
 						const label = workspaceRow.textContent?.trim() ?? "";
 						const matches = getWorkspaceItems().filter((item) => workspaceLabel(item.path) === label);
 						if (matches.length !== 1) return;
@@ -99,7 +109,7 @@ window.__ModuleLoader__.load({
 						return;
 					}
 					const sessionRow = target.closest("[role=\"treeitem\"][aria-selected]");
-					if (!(sessionRow instanceof HTMLElement)) return;
+					if (!(sessionRow instanceof HTMLElement) || !features.copyId) return;
 					if (sessionRow.getAttribute("aria-selected") !== "true") sessionRow.click();
 					const sessionId = getSessionSnapshot().current;
 					if (sessionId === void 0) return;
@@ -179,8 +189,9 @@ window.__ModuleLoader__.load({
 		* @param ctx DSH 浏览器客户端上下文。
 		*/
 		function apply(ctx) {
-			ctx.effect(() => installSessionShortcuts(ctx.sessions), "dsh-sharp-session: document keyboard listener");
-			ctx.effect(() => installSessionNavigation(ctx.sessions), "dsh-sharp-session: tray session navigation");
+			const features = readFeatureFlags();
+			ctx.effect(() => features.escStop ? installSessionShortcuts(ctx.sessions) : () => {}, "dsh-sharp-session: document keyboard listener");
+			ctx.effect(() => features.trayNavigation ? installSessionNavigation(ctx.sessions) : () => {}, "dsh-sharp-session: tray session navigation");
 			ctx.slots.inject("shell.overlay", () => ctx.slots.register({
 				name: "shell.overlay",
 				id: "dsh-sharp-session.context-menu",
@@ -188,6 +199,7 @@ window.__ModuleLoader__.load({
 				store: createMenuStore(),
 				inject: () => ({
 					openWorkspace: (path) => ctx.workspaces.openPath(path),
+					features,
 					getSessionSnapshot: () => ctx.sessions.list.getSnapshot(),
 					getWorkspaceItems: () => ctx.workspaces.list.getSnapshot().items
 				})

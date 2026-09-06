@@ -14,6 +14,17 @@ export interface ShortcutSessions {
   } | undefined
 }
 
+export function readFeatureFlags(locationLike: Location = window.location) {
+  const query = new URLSearchParams(locationLike.search)
+  const enabled = (name: string): boolean => query.get(`dshsharp-${name}`) !== '0'
+  return {
+    escStop: enabled('esc-stop'),
+    copyId: enabled('copy-id'),
+    openWorkspace: enabled('open-workspace'),
+    trayNavigation: enabled('tray-navigation'),
+  }
+}
+
 /** 处理桌面托盘传入的会话地址，并交给 DSH 官方 sessions.open。 */
 export function installSessionNavigation(sessions: ShortcutSessions): () => void {
   const openFromHash = (): void => {
