@@ -269,11 +269,16 @@ public partial class App : Application
     {
         // token 由 query 携带且只用于根路径交换；功能开关放 fragment（303 重定向后仍保留），
         // 由 dsh-sharp-session 插件从 location.hash 读取。
-        var flags = $"dshsharp-esc-stop={(Settings.SessionPluginEscStopEnabled ? 1 : 0)}" +
-                    $"&dshsharp-copy-id={(Settings.SessionPluginCopyIdEnabled ? 1 : 0)}" +
-                    $"&dshsharp-open-workspace={(Settings.SessionPluginOpenWorkspaceEnabled ? 1 : 0)}" +
-                    $"&dshsharp-tray-navigation={(Settings.SessionPluginTrayNavigationEnabled ? 1 : 0)}";
-        return baseUrl.Contains('#') ? baseUrl : $"{baseUrl}#{flags}";
+        return baseUrl.Contains('#') ? baseUrl : $"{baseUrl}#{BuildPluginFeatureHash(Settings)}";
+    }
+
+    /// <summary>构造内置插件功能开关的 fragment 参数（不含 #）。</summary>
+    internal static string BuildPluginFeatureHash(AppSettings settings)
+    {
+        return $"dshsharp-esc-stop={(settings.SessionPluginEscStopEnabled ? 1 : 0)}" +
+               $"&dshsharp-copy-id={(settings.SessionPluginCopyIdEnabled ? 1 : 0)}" +
+               $"&dshsharp-open-workspace={(settings.SessionPluginOpenWorkspaceEnabled ? 1 : 0)}" +
+               $"&dshsharp-tray-navigation={(settings.SessionPluginTrayNavigationEnabled ? 1 : 0)}";
     }
 
     /// <summary>打开设置窗口（已打开则激活）。</summary>

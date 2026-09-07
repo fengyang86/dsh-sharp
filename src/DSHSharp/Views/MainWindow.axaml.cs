@@ -106,8 +106,18 @@ public partial class MainWindow : Window
     /// <summary>通过会话插件接收托盘传入的会话 ID。</summary>
     public void NavigateToSession(string sessionId)
     {
-        var baseUrl = App.Instance?.RuntimeUrl ?? AppSettings.DefaultWebUrl;
-        Web.Source = new Uri($"{baseUrl.TrimEnd('/')}/?dsh-session={Uri.EscapeDataString(sessionId)}");
+        var app = App.Instance;
+        var baseUrl = app?.RuntimeUrl ?? AppSettings.DefaultWebUrl;
+        // dsh-session 与功能开关都放 fragment：query 里的 token 交换后服务端 303 到干净的 /，
+        // query 会被清空，而 fragment 在重定向后由浏览器保留，插件从 location.hash 读取。
+        var hash = $"dsh-session={Uri.EscapeDataString(sessionId)}";
+        if (app is not null)
+        {
+            hash += $"&{App.BuildPluginFeatureHash(app.Settings)}";
+        }
+
+        Web.Source = new Uri($"{baseUrl.TrimEnd('/')}#{hash}");
+        App.Log($"webview navigate to session: {sessionId}");
     }
 
     /// <summary>显示/隐藏 Runtime 启动与故障页。</summary>

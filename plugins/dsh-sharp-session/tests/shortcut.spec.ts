@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { installSessionShortcuts, type ShortcutSessions } from '../src/client/shortcut.ts'
+import { installSessionNavigation, installSessionShortcuts, type ShortcutSessions } from '../src/client/shortcut.ts'
 
 function sessionsFixture(options: { current?: string; running?: boolean } = {}) {
   const cancel = vi.fn(async () => ({ ok: true as const }))
@@ -94,5 +94,72 @@ describe('Esc 会话快捷键', () => {
     await pressEscape()
 
     expect(cancel).not.toHaveBeenCalled()
+  })
+})
+
+describe('托盘会话跳转', () => {
+  function navigationFixture() {
+    const open = vi.fn()
+    const sessions = { open, list: { getSnapshot: () => ({ current: undefined, byId: {} }) } } as unknown as ShortcutSessions
+    return { sessions, open }
+  }
+
+  afterEach(() => {
+    history.replaceState(null, '', window.location.pathname)
+  })
+
+  it('从 hash 读取 dsh-session 并调用 sessions.open', () => {
+    const { sessions, open } = navigationFixture()
+    window.location.hash = '#dsh-session=session-abc'
+
+    const dispose = installSessionNavigation(sessions)
+
+    expect(open).toHaveBeenCalledExactlyOnceWith('session-abc')
+    // 打开后清除 hash，避免刷新时重复跳转。
+    expect(window.location.hash).toBe('')
+    dispose()
+  })
+
+  it('hash 同时携带功能开关参数时不影响会话 ID 提取', () => {
+    const { sessions, open } = navigationFixture()
+    window.location.hash = '#dsh-session=session-def&dshsharp-esc-stop=0&dshsharp-copy-id=1'
+
+    const dispose = installSessionNavigation(sessions)
+
+    expect(open).toHaveBeenCalledExactlyOnceWith('session-def')
+    dispose()
+  })
+
+  it('hash 变化时响应跳转（托盘再次点击）', async () => {
+    const { sessions, open } = navigationFixture()
+    const dispose = installSessionNavigation(sessions)
+    expect(open).not.toHaveBeenCalled()
+
+    window.location.hash = '#dsh-session=session-ghi'
+    await new Promise<void>(resolve => setTimeout(resolve, 0))
+
+    expect(open).toHaveBeenCalledExactlyOnceWith('session-ghi')
+    dispose()
+  })
+
+  it('无 dsh-session 时不调用 open', () => {
+    const { sessions, open } = navigationFixture()
+    window.location.hash = '#dshsharp-esc-stop=1'
+
+    const dispose = installSessionNavigation(sessions)
+
+    expect(open).not.toHaveBeenCalled()
+    dispose()
+  })
+
+  it('卸载后 hash 变化不再响应', async () => {
+    const { sessions, open } = navigationFixture()
+    const dispose = installSessionNavigation(sessions)
+    dispose()
+
+    window.location.hash = '#dsh-session=session-jkl'
+    await new Promise<void>(resolve => setTimeout(resolve, 0))
+
+    expect(open).not.toHaveBeenCalled()
   })
 })
