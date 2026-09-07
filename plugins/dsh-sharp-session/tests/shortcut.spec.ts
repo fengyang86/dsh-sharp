@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { installSessionNavigation, installSessionShortcuts, type ShortcutSessions } from '../src/client/shortcut.ts'
 
 function sessionsFixture(options: { current?: string; running?: boolean } = {}) {
@@ -98,30 +98,42 @@ describe('Esc 会话快捷键', () => {
 })
 
 describe('托盘会话跳转', () => {
-  function navigationFixture() {
+  function navigationFixture(byId: Record<string, { readonly running: boolean }> = {}) {
     const open = vi.fn()
-    const sessions = { open, list: { getSnapshot: () => ({ current: undefined, byId: {} }) } } as unknown as ShortcutSessions
-    return { sessions, open }
+    let snapshot = { current: undefined as string | undefined, byId }
+    const sessions = {
+      open,
+      list: { getSnapshot: () => snapshot },
+    } as unknown as ShortcutSessions
+    return {
+      sessions,
+      open,
+      publish: (next: Record<string, { readonly running: boolean }>) => { snapshot = { current: undefined, byId: next } },
+    }
   }
 
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
   afterEach(() => {
+    vi.useRealTimers()
     history.replaceState(null, '', window.location.pathname)
   })
 
-  it('从 hash 读取 dsh-session 并调用 sessions.open', () => {
-    const { sessions, open } = navigationFixture()
+  it('会话已在列表中时立即打开并清除 hash', () => {
+    const { sessions, open } = navigationFixture({ 'session-abc': { running: false } })
     window.location.hash = '#dsh-session=session-abc'
 
     const dispose = installSessionNavigation(sessions)
 
     expect(open).toHaveBeenCalledExactlyOnceWith('session-abc')
-    // 打开后清除 hash，避免刷新时重复跳转。
     expect(window.location.hash).toBe('')
     dispose()
   })
 
   it('hash 同时携带功能开关参数时不影响会话 ID 提取', () => {
-    const { sessions, open } = navigationFixture()
+    const { sessions, open } = navigationFixture({ 'session-def': { running: false } })
     window.location.hash = '#dsh-session=session-def&dshsharp-esc-stop=0&dshsharp-copy-id=1'
 
     const dispose = installSessionNavigation(sessions)
@@ -130,35 +142,65 @@ describe('托盘会话跳转', () => {
     dispose()
   })
 
-  it('hash 变化时响应跳转（托盘再次点击）', async () => {
+  it('整页重载后列表晚于插件加载：等待目标会话出现再打开', () => {
+    const { sessions, open, publish } = navigationFixture()
+    window.location.hash = '#dsh-session=session-late'
+
+    const dispose = installSessionNavigation(sessions)
+    expect(open).not.toHaveBeenCalled()
+
+    // 列表 baseline 到达（若干次重试之后）。
+    publish({ 'session-late': { running: false } })
+    vi.advanceTimersByTime(1000)
+
+    expect(open).toHaveBeenCalledExactlyOnceWith('session-late')
+    dispose()
+  })
+
+  it('会话始终未出现时在重试窗口结束后放弃', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     const { sessions, open } = navigationFixture()
+    window.location.hash = '#dsh-session=session-never'
+
+    const dispose = installSessionNavigation(sessions)
+    vi.advanceTimersByTime(150 * 70)
+
+    expect(open).not.toHaveBeenCalled()
+    expect(error).toHaveBeenCalled()
+    dispose()
+  })
+
+  it('hash 变化时响应跳转（托盘再次点击）', () => {
+    const { sessions, open } = navigationFixture({ 'session-ghi': { running: true } })
     const dispose = installSessionNavigation(sessions)
     expect(open).not.toHaveBeenCalled()
 
     window.location.hash = '#dsh-session=session-ghi'
-    await new Promise<void>(resolve => setTimeout(resolve, 0))
+    vi.advanceTimersByTime(0)
 
     expect(open).toHaveBeenCalledExactlyOnceWith('session-ghi')
     dispose()
   })
 
   it('无 dsh-session 时不调用 open', () => {
-    const { sessions, open } = navigationFixture()
+    const { sessions, open } = navigationFixture({ 'session-x': { running: false } })
     window.location.hash = '#dshsharp-esc-stop=1'
 
     const dispose = installSessionNavigation(sessions)
+    vi.advanceTimersByTime(2000)
 
     expect(open).not.toHaveBeenCalled()
     dispose()
   })
 
-  it('卸载后 hash 变化不再响应', async () => {
-    const { sessions, open } = navigationFixture()
+  it('卸载后停止等待且 hash 变化不再响应', () => {
+    const { sessions, open, publish } = navigationFixture()
+    window.location.hash = '#dsh-session=session-jkl'
+
     const dispose = installSessionNavigation(sessions)
     dispose()
-
-    window.location.hash = '#dsh-session=session-jkl'
-    await new Promise<void>(resolve => setTimeout(resolve, 0))
+    publish({ 'session-jkl': { running: false } })
+    vi.advanceTimersByTime(2000)
 
     expect(open).not.toHaveBeenCalled()
   })
