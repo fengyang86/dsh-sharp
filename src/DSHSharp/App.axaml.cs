@@ -32,6 +32,7 @@ public partial class App : Application
     private DshEventMonitor? _monitor;
     private DshServiceManager? _serviceManager;
     private DshApiClient? _apiClient;
+    private DshAuthSession? _authSession;
     private MainWindow? _mainWindow;
     private SettingsWindow? _settingsWindow;
     private TrayIcon? _trayIcon;
@@ -39,6 +40,7 @@ public partial class App : Application
     private NativeMenuItem? _trayServiceItem;
     private NativeMenuItem? _traySessionsItem;
     private Timer? _sessionRefreshTimer;
+    private int _sessionRefreshFailures;
     private bool _isExiting;
     private bool _serviceOnline;
     private bool _isStarting;
@@ -247,16 +249,31 @@ public partial class App : Application
     private void ConnectRuntime()
     {
         _monitor?.Dispose();
-        SetupDshMonitor();
-        _apiClient = new DshApiClient(RuntimeBaseUrl);
+        // HTTP RPC、事件流与 WebView 共享同一认证会话：token 换 cookie 只做一次。
+        var auth = new DshAuthSession(RuntimeBaseUrl);
+        _authSession = auth;
+        _ = Task.Run(async () =>
+        {
+            if (!await auth.EnsureAuthenticatedAsync())
+            {
+                Log($"runtime auth cookie exchange failed: {auth.Origin}");
+            }
+        });
+        SetupDshMonitor(auth);
+        _apiClient = new DshApiClient(auth);
         StartSessionRefresh();
         _mainWindow?.ReloadWeb(BuildPluginFeatureUrl(RuntimeBaseUrl));
     }
 
     private string BuildPluginFeatureUrl(string baseUrl)
     {
-        var separator = baseUrl.Contains('?') ? '&' : '?';
-        return $"{baseUrl}{separator}dshsharp-esc-stop={(Settings.SessionPluginEscStopEnabled ? 1 : 0)}&dshsharp-copy-id={(Settings.SessionPluginCopyIdEnabled ? 1 : 0)}&dshsharp-open-workspace={(Settings.SessionPluginOpenWorkspaceEnabled ? 1 : 0)}&dshsharp-tray-navigation={(Settings.SessionPluginTrayNavigationEnabled ? 1 : 0)}";
+        // token 由 query 携带且只用于根路径交换；功能开关放 fragment（303 重定向后仍保留），
+        // 由 dsh-sharp-session 插件从 location.hash 读取。
+        var flags = $"dshsharp-esc-stop={(Settings.SessionPluginEscStopEnabled ? 1 : 0)}" +
+                    $"&dshsharp-copy-id={(Settings.SessionPluginCopyIdEnabled ? 1 : 0)}" +
+                    $"&dshsharp-open-workspace={(Settings.SessionPluginOpenWorkspaceEnabled ? 1 : 0)}" +
+                    $"&dshsharp-tray-navigation={(Settings.SessionPluginTrayNavigationEnabled ? 1 : 0)}";
+        return baseUrl.Contains('#') ? baseUrl : $"{baseUrl}#{flags}";
     }
 
     /// <summary>打开设置窗口（已打开则激活）。</summary>
@@ -373,15 +390,31 @@ public partial class App : Application
         StartSessionRefresh();
     }
 
-    /// <summary>启动会话列表定时刷新（60s 间隔，首次 5s 后）。</summary>
+    /// <summary>启动会话列表自调度刷新（成功 60s；连续失败指数退避至 10 分钟，避免 401 刷屏日志）。</summary>
     private void StartSessionRefresh()
     {
         _sessionRefreshTimer?.Dispose();
+        _sessionRefreshFailures = 0;
         _sessionRefreshTimer = new Timer(
             _ => _ = RefreshSessionsAsync(),
             null,
             TimeSpan.FromSeconds(5),
-            TimeSpan.FromSeconds(60));
+            Timeout.InfiniteTimeSpan);
+    }
+
+    private void ScheduleSessionRefresh()
+    {
+        var delay = _sessionRefreshFailures == 0
+            ? TimeSpan.FromSeconds(60)
+            : TimeSpan.FromSeconds(Math.Min(60 * Math.Pow(2, _sessionRefreshFailures), 600));
+        try
+        {
+            _sessionRefreshTimer?.Change(delay, Timeout.InfiniteTimeSpan);
+        }
+        catch (ObjectDisposedException)
+        {
+            // 退出路径：忽略。
+        }
     }
 
     /// <summary>拉取会话列表并更新托盘"最近会话"子菜单。</summary>
@@ -390,6 +423,7 @@ public partial class App : Application
         var client = _apiClient;
         if (client is null || !_serviceOnline)
         {
+            ScheduleSessionRefresh();
             return;
         }
 
@@ -397,10 +431,18 @@ public partial class App : Application
         try
         {
             sessions = await client.ListSessionsAsync();
+            _sessionRefreshFailures = 0;
         }
         catch (Exception ex)
         {
-            Log($"session list refresh failed: {ex.Message}");
+            _sessionRefreshFailures++;
+            Log($"session list refresh failed ({_sessionRefreshFailures}): {ex.Message}");
+            if (_sessionRefreshFailures == 1)
+            {
+                ShowSessionListError("会话列表暂不可用，正在自动重试");
+            }
+
+            ScheduleSessionRefresh();
             return;
         }
 
@@ -434,6 +476,23 @@ public partial class App : Application
                 item.Click += (_, _) => SafePost("tray:session", () => NavigateToSession(sessionId));
                 menu.Items.Add(item);
             }
+        });
+        ScheduleSessionRefresh();
+    }
+
+    /// <summary>会话列表获取失败时在托盘子菜单给出可见提示（失败恢复后由下次成功刷新覆盖）。</summary>
+    private void ShowSessionListError(string message)
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            var menu = _traySessionsItem?.Menu;
+            if (menu is null)
+            {
+                return;
+            }
+
+            menu.Items.Clear();
+            menu.Items.Add(new NativeMenuItem($"（{message}）") { IsEnabled = false });
         });
     }
 
@@ -582,10 +641,10 @@ public partial class App : Application
         }
     }
 
-    private void SetupDshMonitor()
+    private void SetupDshMonitor(DshAuthSession auth)
     {
         DshEventMonitor.Log = Log;
-        _monitor = new DshEventMonitor(RuntimeBaseUrl);
+        _monitor = new DshEventMonitor(auth);
         _monitor.SessionCompleted += OnSessionCompleted;
         _monitor.ServiceAvailabilityChanged += OnServiceAvailabilityChanged;
         _monitor.Start();
@@ -606,9 +665,20 @@ public partial class App : Application
             string? preview = null;
             try
             {
-                var client = new DshApiClient(RuntimeBaseUrl);
+                var client = _apiClient ?? new DshApiClient(_authSession ?? new DshAuthSession(RuntimeBaseUrl));
                 title = string.IsNullOrEmpty(e.Title) ? ShortId(e.SessionId) : e.Title;
-                preview = await client.GetLastAssistantTextAsync(e.SessionId);
+                // session/page 的 throughSeq 不得越过会话游标：优先用事件流缓存的 asOfSeq，缺失时从会话列表补查。
+                var throughSeq = e.AsOfSeq;
+                if (throughSeq <= 0)
+                {
+                    var sessions = await client.ListSessionsAsync();
+                    throughSeq = sessions.FirstOrDefault(s => s.SessionId == e.SessionId)?.AsOfSeq ?? 0;
+                }
+
+                if (throughSeq > 0)
+                {
+                    preview = await client.GetLastAssistantTextAsync(e.SessionId, throughSeq);
+                }
             }
             catch (Exception ex)
             {
@@ -703,7 +773,7 @@ public partial class App : Application
     /// </summary>
     public async Task<string> CheckDshVersionAsync()
     {
-        var api = _apiClient ?? new DshApiClient(RuntimeBaseUrl);
+        var api = _apiClient ?? new DshApiClient(_authSession ?? new DshAuthSession(RuntimeBaseUrl));
         try
         {
             var installed = _serviceManager?.InstalledPackageVersion;
@@ -740,7 +810,7 @@ public partial class App : Application
             string? targetVersion;
             try
             {
-                targetVersion = await (_apiClient ?? new DshApiClient(RuntimeBaseUrl)).GetNpmLatestVersionAsync();
+                targetVersion = await (_apiClient ?? new DshApiClient(_authSession ?? new DshAuthSession(RuntimeBaseUrl))).GetNpmLatestVersionAsync();
             }
             catch (Exception ex)
             {

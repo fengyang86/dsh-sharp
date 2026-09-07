@@ -53,11 +53,12 @@ DSHSharp.slnx
 | `Services/AppSettingsService` | settings.json 持久化（%APPDATA%/DSHSharp/） |
 | `Services/AutoStartService` | 登录自启动：Windows 注册表 Run 键（`--autostart`） |
 | `Services/SingleInstanceService` | 命名 Mutex 单实例 + 命名事件唤起已有窗口 |
-| `Dsh/DshEventMonitor` | 事件监控：mux WebSocket 流（turn/end 完成、session/title）+ HTTP 心跳 |
-| `Dsh/DshServiceManager` | 私有 Runtime：私有包、私有 `DSH_HOME`、端口回退、进程所有权、失败诊断 |
-| `Dsh/DshApiClient` | HTTP RPC 客户端：session.list / session.history / host.describe / npm 版本 |
-| `Dsh/DshFrameParser` | mux 流帧解析（信封格式 {type,seq,time,data}） |
-| `Dsh/DshRpcParser` | RPC 响应解析（会话列表/回复文本/版本号） |
+| `Dsh/DshAuthSession` | 认证会话：启动 token 换签名 cookie，RPC/事件流/WebView 共享，401 或重启后重交换 |
+| `Dsh/DshEventMonitor` | 事件监控：remote.mux 逻辑流（api-session 边沿判定完成）+ HTTP 心跳；旧版 events.mux 自动回退 |
+| `Dsh/DshServiceManager` | 私有 Runtime：私有包、私有 `DSH_HOME`、端口回退、进程所有权、失败诊断、孤儿清理（pid 文件 + 命令行兜底扫描） |
+| `Dsh/DshApiClient` | HTTP RPC 客户端：session/list / session/page / npm 版本（新旧方法名自动回退） |
+| `Dsh/DshFrameParser` | 事件帧解析（新 emit 帧 + 旧 SessionEvent 信封） |
+| `Dsh/DshRpcParser` | RPC 响应解析（会话列表/分页记录/npm 版本） |
 
 ### 2.2 DSHSharp（壳层）
 
@@ -118,27 +119,39 @@ Program.Main
 ### 3.3 会话完成通知流程
 
 ```
-mux 流帧（session/event, turn/end, reason.kind=completed）
- └─ 信封解析（data.reason.kind）
-     └─ SessionCompleted 事件（后台线程）
-         └─ 异步取回复预览（session.history → 最后 assistant/message 文本）
+remote.mux emit 帧（api-session/status 或 api-session/added）
+ └─ running true→false 边沿（首次观测只记录，避免空闲会话误报）
+     └─ SessionCompleted 事件（后台线程，携带标题与 asOfSeq 游标）
+         └─ 异步取回复预览（session/page + throughSeq → 最后 assistant/message 文本）
              └─ UI 线程：Toast（会话名 + 回复开头）+ 系统提示音 + 托盘驻留时唤起窗口
 ```
 
+旧版 runtime 回退路径：events.mux 帧 `turn/end` + `reason.kind=completed` 直接触发完成。
+
 ## 5. DSH 官方协议（客户端直接消费）
 
-- **HTTP RPC**：`POST /api/<method>`，请求 `{type:'client-request', rpcId, method, payload}`，
-  响应 `{type:'server-response', rpcId, result:{ok, value|error}}`
-- **事件流**：`ws://<host>/api/events.mux`（连接后服务端直接推送，无握手请求）
-  - 帧：`{type:'server-request', rpcId, method, payload:{type:'session/event', sessionId, event}}`
-  - `SessionEvent` 信封：`{type, seq, time, data}`（内容在 `data` 内）
-  - 关键事件：`turn/end`（`data.reason.kind='completed'` 表示任务完成）、`session/title`（`data.title`）
+DSH 0.1.2-rc.1 起协议有三处重大变化（客户端已适配，旧版 runtime 自动回退兼容）：
+
+- **浏览器认证（token→cookie）**：每个进程启动生成随机令牌并打印 `dsh web: http://…/?token=…`；
+  唯一入口是 `GET /?token=…` → 303 + 绑定 host:port 的签名 cookie（HttpOnly、SameSite=Strict、30 天，
+  密钥持久于私有 `DSH_HOME/.credentials.yaml`）。此后所有 HTTP RPC 与 WebSocket 只认 cookie，
+  query token 与 Authorization 头均被拒绝；Host 必须 loopback、Origin（若有）必须等于 Host。
+  客户端由 `DshAuthSession` 统一兑换：WebView、HTTP RPC 与事件流共享同一 cookie 容器，
+  runtime 重启/端口漂移后自动重交换。旧版 runtime（无 token URL）直连，无需兑换。
+- **HTTP RPC**：`POST /api/<domain>/<method>`，方法名用斜杠（`session/list`），payload 需
+  `{ args: { _request | request } }` 包装（无实参方法用 `_request`，有实参方法用 `request`）。
+  `session/page` 的 `throughSeq` 不得越过会话游标（取摘要 `projections.asOfSeq`）；`host.describe` 已移除。
+  客户端对旧版点号方法名（`session.list`）与平铺 payload 做运行时回退。
+- **事件流**：`ws://<host>/api/events.mux` 已移除，改为 `/api/remote.mux` 逻辑流——
+  连接后发送 `{type:'open', streamId, endpoint:'$events', payload:{args:{}}}`，
+  服务端先回 `{type:'item', value:{type:'ready', clientId, host}}` 首项，再推送
+  `{type:'item', value:{type:'emit', event, args}}` 事件项与 `{type:'end'|'error'}` 终止帧。
+  会话完成由 `api-session/status`（args `[sessionId, isRunning]`）与 `api-session/added`
+  （args `[会话摘要]`）的 running true→false 边沿判定；旧版信封（`turn/end` + `data.reason.kind`）仅在回退路径解析。
 - **关键 RPC**：
-  - `session.list` → 会话列表（标题在 `projections.values.title`）
-  - `session.history` → 会话事件（回复文本在最后 `assistant/message` 的 `data.message.content[].text`）
-  - `host.describe` → `version`（运行版本）
-  - `session.create` / `session.prompt` → 建会话/发消息
-  - `session.cancel` → 协作式停止指定会话当前轮次
+  - `session/list` → 会话列表（标题在 `projections.values.title`，`projections.asOfSeq` 是分页游标）
+  - `session/page` → 会话历史（`args.request.address.{kind,sessionId}` + `throughSeq`，回复文本在最后 `assistant/message` 的 `records[].event.data.message.content[].text`）
+  - `session.create` / `session/prompt` / `session.cancel` → 建会话/发消息/协作停止
 
 ## 6. 设置、命令与插件
 

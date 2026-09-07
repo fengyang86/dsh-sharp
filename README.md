@@ -16,12 +16,14 @@
 - **私有 DSH Runtime**：仅管理 `%APPDATA%/DSHSharp/dsh-runtime` 中固定版本的官方包；不连接或改动外部、远程和源码 DSH
   - 私有 `DSH_HOME`：会话、插件、设置和凭据位于 `%APPDATA%/DSHSharp/dsh-home`，不与命令行 DSH 混用
   - 首选 3080；端口被占用时自动选择备用本机端口，并在运行时详情显示实际地址
+  - 孤儿清理：pid 文件 + 进程命令行兜底扫描，客户端异常退出遗留的私有 Runtime 在下次启动时自动回收（外部 DSH 进程不受影响）
   - 失败诊断：Runtime 启动页显示重试与服务日志尾部（`dsh-service.log`）
 - **自启动**：注册 HKCU Run 键，`--autostart` 静默驻留托盘
 
 ### 通知与监控
-- **会话完成通知**：订阅 `events.mux` 流，`turn/end` 完成事件 → 置顶 Toast（会话名 + 回复开头预览）+ 系统提示音 + 托盘驻留时自动唤起窗口
-- **最近会话**：托盘子菜单列出会话（真实标题 + 运行中标记，60s 自动刷新）
+- **会话完成通知**：订阅 DSH 事件流（DSH 0.1.2+ 为 `remote.mux` 逻辑流，旧版为 `events.mux`），会话 running 翻转 → 置顶 Toast（会话名 + 回复开头预览）+ 系统提示音 + 托盘驻留时自动唤起窗口
+- **浏览器认证适配**：DSH 0.1.2+ 的 token→cookie 认证由客户端统一兑换，WebView、HTTP RPC 与事件流共享同一会话；runtime 重启后自动重交换
+- **最近会话**：托盘子菜单列出会话（真实标题 + 运行中标记，60s 自动刷新，失败退避重试）
 - **服务状态栏**：彩色圆点（在线绿/启动橙/离线灰）+ 实际 Runtime 地址与状态
 - **双版本与兼容更新**：独立显示 DSH-Sharp 客户端版本、DSH Runtime 版本、npm 最新版本和支持范围；Runtime 更新只安装兼容范围内的精确版本
 
@@ -44,7 +46,7 @@
 | Avalonia | 12.1（Fluent 主题，`WindowDecorations` 自绘标题栏） |
 | 内嵌 WebView | [Avalonia.Controls.WebView](https://www.nuget.org/packages/Avalonia.Controls.WebView) 12.1（WebView2 / WebKit / WebKitGTK） |
 | MVVM | CommunityToolkit.Mvvm |
-| 单元测试 | xUnit（55 项）+ Vitest（8 项） |
+| 单元测试 | xUnit（75 项）+ Vitest（8 项） |
 
 ## 解决方案结构
 

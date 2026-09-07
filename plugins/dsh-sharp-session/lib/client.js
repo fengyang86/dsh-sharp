@@ -11,7 +11,8 @@ window.__ModuleLoader__.load({
 		//#region src/client/shortcut.ts
 		function readFeatureFlags(locationLike = window.location) {
 			const query = new URLSearchParams(locationLike.search);
-			const enabled = (name) => query.get(`dshsharp-${name}`) !== "0";
+			const hash = new URLSearchParams(locationLike.hash.replace(/^#/, ""));
+			const enabled = (name) => (hash.get(`dshsharp-${name}`) ?? query.get(`dshsharp-${name}`)) !== "0";
 			return {
 				escStop: enabled("esc-stop"),
 				copyId: enabled("copy-id"),

@@ -23,6 +23,7 @@ public partial class MainWindow : Window
     {
         _settings = settings;
         InitializeComponent();
+        Web.IsVisible = false;
 
         var viewModel = new MainWindowViewModel(settings);
         DataContext = viewModel;
@@ -93,7 +94,14 @@ public partial class MainWindow : Window
     public void SetWebViewVisible(bool visible) => Web.IsVisible = visible;
 
     /// <summary>重载 WebView 到新地址（服务地址切换）。</summary>
-    public void ReloadWeb(string url) => Web.Source = new Uri(url);
+    public void ReloadWeb(string url)
+    {
+        // WebView2 可能仍停留在上一次无令牌导航；先清空再设置，确保认证地址真正触发新导航。
+        Web.Source = new Uri("about:blank");
+        Web.Source = new Uri(url);
+        Web.IsVisible = true;
+        App.Log($"webview navigation: {url}");
+    }
 
     /// <summary>通过会话插件接收托盘传入的会话 ID。</summary>
     public void NavigateToSession(string sessionId)

@@ -6,4 +6,13 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- 孤儿私有 Runtime 清理需要读取进程命令行（仅 Windows WMI 路径使用）。 -->
+    <PackageReference Include="System.Management" Version="9.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="DSHSharp.Core.Tests" />
+  </ItemGroup>
+
 </Project>

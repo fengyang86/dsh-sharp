@@ -16,7 +16,9 @@ export interface ShortcutSessions {
 
 export function readFeatureFlags(locationLike: Location = window.location) {
   const query = new URLSearchParams(locationLike.search)
-  const enabled = (name: string): boolean => query.get(`dshsharp-${name}`) !== '0'
+  const hash = new URLSearchParams(locationLike.hash.replace(/^#/, ''))
+  const enabled = (name: string): boolean =>
+    (hash.get(`dshsharp-${name}`) ?? query.get(`dshsharp-${name}`)) !== '0'
   return {
     escStop: enabled('esc-stop'),
     copyId: enabled('copy-id'),

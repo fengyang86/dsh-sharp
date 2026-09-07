@@ -147,4 +147,83 @@ public sealed class DshRpcParserTests
         Assert.Null(DshRpcParser.ParseLastAssistantText(
             """{"type":"server-response","rpcId":"h4","result":{"ok":false,"error":{"code":"internal","message":"x","details":{}}}}"""));
     }
+
+    [Fact]
+    public void IsOk_DetectsResultEnvelope()
+    {
+        Assert.True(DshRpcParser.IsOk("""{"type":"server-response","rpcId":"r","result":{"ok":true,"value":{}}}"""));
+        Assert.False(DshRpcParser.IsOk("""{"type":"server-response","rpcId":"r","result":{"ok":false,"error":{}}}"""));
+        Assert.False(DshRpcParser.IsOk("""{"type":"server-response","rpcId":"r"}"""));
+        Assert.False(DshRpcParser.IsOk("{not json"));
+    }
+
+    [Fact]
+    public void Parses_SessionList_AsOfSeq()
+    {
+        const string json = """
+            {"result":{"ok":true,"value":{"items":[
+              {"sessionId":"s1","updatedAt":2000,"running":false,
+               "projections":{"asOfSeq":2149,"values":{"title":"分析"}}}
+            ]}}}
+            """;
+
+        var sessions = DshRpcParser.ParseSessionList(json);
+
+        var item = Assert.Single(sessions);
+        Assert.Equal(2149, item.AsOfSeq);
+        Assert.Equal("分析", item.Title);
+    }
+
+    [Fact]
+    public void Extracts_LastAssistantText_FromPageRecords()
+    {
+        // DSH 0.1.2+ session/page 响应：value.records[]，事件项在 event 字段内。
+        const string json = """
+            {"type":"server-response","rpcId":"p1","result":{"ok":true,"value":{"records":[
+              {"type":"event","event":{"type":"user/message","seq":10,"time":1,"data":{"message":{"role":"user","content":[{"type":"text","text":"继续"}]}}}},
+              {"type":"event","event":{"type":"assistant/message","seq":11,"time":2,"data":{"message":{"role":"assistant","content":[{"type":"text","text":"已修复"},{"type":"text","text":"，验证通过"}]}}}},
+              {"type":"event","event":{"type":"turn/end","seq":12,"time":3,"data":{"turn":2,"reason":{"kind":"completed"}}}}
+            ]}}}
+            """;
+
+        var text = DshRpcParser.ParsePageRecords(json);
+
+        Assert.Equal("已修复，验证通过", text);
+    }
+
+    [Fact]
+    public void ReturnsNull_FromPageRecords_WithoutAssistantMessage()
+    {
+        const string json = """
+            {"result":{"ok":true,"value":{"records":[
+              {"type":"chunks","event":{"type":"chunkrow/text-chunks","seq":5,"time":1,"data":{"texts":["流式"]}}}
+            ]}}}
+            """;
+
+        Assert.Null(DshRpcParser.ParsePageRecords(json));
+        Assert.Null(DshRpcParser.ParsePageRecords("{not json"));
+    }
+
+    [Fact]
+    public void PagePayload_UsesRequestWrapper_WithAddressAndThroughSeq()
+    {
+        var payload = DshApiClient.DshPayloads.SessionPageNew("session-x", 1234);
+        var json = System.Text.Json.JsonSerializer.Serialize(payload);
+
+        Assert.Contains("\"args\"", json);
+        Assert.Contains("\"request\"", json);
+        Assert.Contains("\"address\"", json);
+        Assert.Contains("\"kind\":\"session\"", json);
+        Assert.Contains("\"sessionId\":\"session-x\"", json);
+        Assert.Contains("\"throughSeq\":1234", json);
+    }
+
+    [Fact]
+    public void ListPayload_UsesEmptyRequestWrapper()
+    {
+        var json = System.Text.Json.JsonSerializer.Serialize(DshApiClient.DshPayloads.SessionListNew);
+
+        Assert.Contains("\"args\"", json);
+        Assert.Contains("\"_request\"", json);
+    }
 }

@@ -61,6 +61,7 @@ public sealed class DshServiceManager : IDisposable
     private Process? _process;
     private bool _intentionalStop;
     private bool _disposed;
+    private TaskCompletionSource<Uri>? _readyUrlSource;
 
     public DshServiceManager(string baseUrl, ManagedMode mode, string? sourcePath, string? logDirectory = null)
     {
@@ -238,6 +239,7 @@ public sealed class DshServiceManager : IDisposable
                 }
 
                 _activeBaseUri = new UriBuilder(_baseUri) { Host = "127.0.0.1", Port = port }.Uri;
+                _readyUrlSource = new TaskCompletionSource<Uri>(TaskCreationOptions.RunContinuationsAsynchronously);
                 var psi = BuildStartInfo(port);
                 Log?.Invoke($"starting private runtime: {psi.FileName} {psi.Arguments} (port={port})");
                 AppendLog($"--- DSH private runtime start (port={port}) ---");
@@ -261,9 +263,17 @@ public sealed class DshServiceManager : IDisposable
                     if (await ProbeAsync(_activeBaseUri, ct))
                     {
                         // DSH 先监听端口，再异步输出带认证令牌的完整地址；等待输出泵完成，避免 WebView 抢先加载无令牌地址。
-                        var captureDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
-                        while (DateTime.UtcNow < captureDeadline && string.IsNullOrEmpty(_activeBaseUri.Query))
-                            await Task.Delay(50, ct);
+                        var readyTask = _readyUrlSource.Task;
+                        try
+                        {
+                            await readyTask.WaitAsync(TimeSpan.FromSeconds(10), ct);
+                        }
+                        catch (TimeoutException)
+                        {
+                            // 旧版 runtime 无令牌输出；新版未捕获时保持启动成功，由认证层在 RPC/事件流上显式报错。
+                            Log?.Invoke("private runtime ready, but authenticated URL not captured within 10s");
+                        }
+
                         Log?.Invoke($"private runtime ready: {ActiveBaseUrl}");
                         return true;
                     }
@@ -424,7 +434,7 @@ public sealed class DshServiceManager : IDisposable
             return;
         }
 
-        _activeBaseUri = new UriBuilder(_baseUri) { Host = "127.0.0.1", Port = _baseUri.Port }.Uri;
+        // 保留最后已知地址（含令牌 query）供 UI 展示与重启前比对；下次启动重新探测端口。
 
         Log?.Invoke($"managed process exited, code={process.ExitCode}");
         AppendLog($"--- DSH service process exited, code={process.ExitCode} ---");
@@ -460,19 +470,155 @@ public sealed class DshServiceManager : IDisposable
         }
     }
 
+    /// <summary>
+    /// 清理遗留的私有 Runtime 进程：pid 文件记录的直接杀掉；
+    /// 再按命令行兜底扫描（仅限命令行包含私有运行目录的 node 进程，外部 DSH 不受影响）。
+    /// 覆盖 pid 文件丢失（异常退出未写、手误删除、旧版本部署）遗留的孤儿。
+    /// </summary>
     private void CleanupOrphanedRuntimeProcess()
     {
         try
         {
-            if (!File.Exists(_runtimePidPath) || !int.TryParse(File.ReadAllText(_runtimePidPath), out var pid)) return;
-            using var process = Process.GetProcessById(pid);
-            if (!process.HasExited) process.Kill(entireProcessTree: true);
+            if (File.Exists(_runtimePidPath) && int.TryParse(File.ReadAllText(_runtimePidPath), out var pid))
+            {
+                KillRuntimePid(pid);
+            }
+
+            var ownedId = _process?.Id;
+            foreach (var orphanPid in FindPrivateRuntimeProcessIds())
+            {
+                if (orphanPid == ownedId)
+                {
+                    continue;
+                }
+
+                Log?.Invoke($"orphaned private runtime detected by command line: pid={orphanPid}");
+                KillRuntimePid(orphanPid);
+            }
         }
         catch (Exception ex) when (ex is IOException or InvalidOperationException or ArgumentException or System.ComponentModel.Win32Exception)
         {
             Log?.Invoke($"orphaned runtime cleanup skipped: {ex.Message}");
         }
         finally { try { if (File.Exists(_runtimePidPath)) File.Delete(_runtimePidPath); } catch (IOException) { } }
+    }
+
+    private void KillRuntimePid(int pid)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(pid);
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                process.WaitForExit(TimeSpan.FromSeconds(5));
+                Log?.Invoke($"orphaned private runtime killed: pid={pid}");
+            }
+        }
+        catch (ArgumentException)
+        {
+            // 进程已不存在。
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            Log?.Invoke($"orphaned runtime kill failed (pid={pid}): {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 扫描命令行指向私有 Runtime 安装目录的 node 进程。
+    /// 只有同时包含私有目录路径与官方 bin.js 的进程才会被识别为“自己人”，外部/源码 DSH 不会匹配。
+    /// </summary>
+    internal IEnumerable<int> FindPrivateRuntimeProcessIds()
+    {
+        var marker = NormalizePath(Path.Combine(_packageDirectory, "node_modules"));
+        foreach (var (pid, commandLine) in ListNodeProcessCommandLines())
+        {
+            if (commandLine is not null &&
+                NormalizePath(commandLine).Contains(marker, StringComparison.OrdinalIgnoreCase) &&
+                commandLine.Contains("bin.js", StringComparison.OrdinalIgnoreCase))
+            {
+                yield return pid;
+            }
+        }
+    }
+
+    private static string NormalizePath(string value) => value.Replace('/', '\\');
+
+    private static IEnumerable<(int Pid, string? CommandLine)> ListNodeProcessCommandLines()
+    {
+        return OperatingSystem.IsWindows()
+            ? ListNodeProcessCommandLinesWindows()
+            : ListNodeProcessCommandLinesUnix();
+    }
+
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private static List<(int Pid, string? CommandLine)> ListNodeProcessCommandLinesWindows()
+    {
+        var results = new List<(int Pid, string? CommandLine)>();
+        try
+        {
+            using var searcher = new System.Management.ManagementObjectSearcher(
+                "SELECT ProcessId, CommandLine FROM Win32_Process WHERE Name = 'node.exe'");
+            foreach (var item in searcher.Get().Cast<System.Management.ManagementBaseObject>())
+            {
+                using (item)
+                {
+                    var pid = Convert.ToInt32(item["ProcessId"], System.Globalization.CultureInfo.InvariantCulture);
+                    results.Add((pid, item["CommandLine"] as string));
+                }
+            }
+        }
+        catch (Exception ex) when (ex is System.Management.ManagementException or InvalidOperationException or System.Runtime.InteropServices.COMException)
+        {
+            // WMI 不可用时跳过兜底扫描，pid 文件路径仍然有效。
+            Log?.Invoke($"runtime process scan unavailable: {ex.Message}");
+        }
+
+        return results;
+    }
+
+    private static List<(int Pid, string? CommandLine)> ListNodeProcessCommandLinesUnix()
+    {
+        var results = new List<(int Pid, string? CommandLine)>();
+        try
+        {
+            var psi = new ProcessStartInfo("ps", "-eo pid=,args=")
+            {
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+            };
+            using var ps = Process.Start(psi);
+            if (ps is null)
+            {
+                return results;
+            }
+
+            var lines = ps.StandardOutput.ReadToEnd().Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            ps.WaitForExit(TimeSpan.FromSeconds(5));
+            foreach (var line in lines)
+            {
+                var trimmed = line.TrimStart();
+                var space = trimmed.IndexOf(' ');
+                if (space <= 0 || !int.TryParse(trimmed[..space], out var pid))
+                {
+                    continue;
+                }
+
+                var args = trimmed[(space + 1)..];
+                if (args.StartsWith("node", StringComparison.Ordinal))
+                {
+                    results.Add((pid, args));
+                }
+            }
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException)
+        {
+            // ps 不可用时跳过兜底扫描。
+            Log?.Invoke($"runtime process scan unavailable: {ex.Message}");
+        }
+
+        return results;
     }
 
     private IEnumerable<int> CandidatePorts()
@@ -1490,6 +1636,7 @@ public sealed class DshServiceManager : IDisposable
         if (Uri.TryCreate(value, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https")
         {
             _activeBaseUri = uri;
+            _readyUrlSource?.TrySetResult(uri);
             Log?.Invoke($"captured private runtime URL: {uri}");
         }
     }
