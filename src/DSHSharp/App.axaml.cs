@@ -33,6 +33,7 @@ public partial class App : Application
     private DshServiceManager? _serviceManager;
     private DshApiClient? _apiClient;
     private DshAuthSession? _authSession;
+    private ClientUpdateService? _clientUpdate;
     private MainWindow? _mainWindow;
     private SettingsWindow? _settingsWindow;
     private TrayIcon? _trayIcon;
@@ -101,9 +102,53 @@ public partial class App : Application
 
             // DSH-Sharp 是私有 Runtime 的唯一宿主。服务就绪后才创建 WebView 连接。
             _ = StartManagedServiceAsync();
+
+            // 客户端更新：启动即检查并后台预下载（失败静默，可到设置页手动重试）。
+            _clientUpdate = new ClientUpdateService();
+            ClientUpdateService.Log = Log;
+            _clientUpdate.CleanupStaging();
+            if (Settings.ClientUpdateCheckEnabled)
+            {
+                _ = Task.Run(() => _clientUpdate.CheckAsync());
+            }
         }
 
         base.OnFrameworkInitializationCompleted();
+    }
+
+    /// <summary>下载就绪的客户端更新：拉起 staging 新 EXE 自安装并退出当前实例。</summary>
+    public void InstallClientUpdate()
+    {
+        var staging = _clientUpdate?.State.StagingDirectory;
+        if (staging is null || !File.Exists(Path.Combine(staging, "DSHSharp.exe")))
+        {
+            Log("client update install skipped: staging not ready");
+            return;
+        }
+
+        var installDir = AppContext.BaseDirectory;
+        Log($"client update: launching installer from {staging}");
+        try
+        {
+            using var installer = Process.Start(new ProcessStartInfo
+            {
+                FileName = Path.Combine(staging, "DSHSharp.exe"),
+                Arguments = $"--apply-update \"{installDir}\" {Environment.ProcessId}",
+                UseShellExecute = true,
+            });
+            if (installer is null)
+            {
+                Log("client update installer failed to start");
+                return;
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"client update installer start failed: {ex.Message}");
+            return;
+        }
+
+        RequestShutdown();
     }
 
     /// <summary>唤起主窗口（单实例第二实例通知、托盘点击、通知点击）。线程安全，可在任意线程调用。</summary>
@@ -302,7 +347,9 @@ public partial class App : Application
                 UpdateManagedService,
                 () => _serviceManager?.ListProfilePlugins() ?? [],
                 async (name, active) => _serviceManager is not null && await _serviceManager.SetPluginActiveAsync(name, active),
-                async name => _serviceManager is not null && await _serviceManager.RemovePluginAsync(name)));
+                async name => _serviceManager is not null && await _serviceManager.RemovePluginAsync(name),
+                _clientUpdate,
+                InstallClientUpdate));
             _settingsWindow.Closed += (_, _) => _settingsWindow = null;
             _settingsWindow.Show();
         });
@@ -331,6 +378,7 @@ public partial class App : Application
         Settings.SessionPluginCopyIdEnabled = updated.SessionPluginCopyIdEnabled;
         Settings.SessionPluginOpenWorkspaceEnabled = updated.SessionPluginOpenWorkspaceEnabled;
         Settings.SessionPluginTrayNavigationEnabled = updated.SessionPluginTrayNavigationEnabled;
+        Settings.ClientUpdateCheckEnabled = updated.ClientUpdateCheckEnabled;
 
         Settings = updated;
         try
@@ -783,13 +831,14 @@ public partial class App : Application
         {
             var installed = _serviceManager?.InstalledPackageVersion;
             var latest = await api.GetNpmLatestVersionAsync();
+            // 目标版本与升级按钮同语义：npm latest 在支持范围内取 latest，否则取客户端最新已验证版本。
+            var target = DshSharpCompatibility.IsCompatible(latest) ? latest : DshSharpCompatibility.DefaultDshVersion;
             if (latest is null)
             {
                 return $"DSH-Sharp：{DshSharpCompatibility.ProductVersion}\nDSH 私有运行版本：{installed ?? "未安装"}\n支持范围：{DshSharpCompatibility.SupportedRange}\nnpm 最新版本：查询失败";
             }
             var status = !DshSharpCompatibility.IsCompatible(installed) ? "私有安装版本不兼容或无法识别，请先升级客户端" :
-                !DshSharpCompatibility.IsCompatible(latest) ? "npm 最新版本超出当前客户端支持范围" :
-                installed == latest ? "已是最新" : "有兼容更新";
+                installed == target ? "已是最新" : $"可更新到 {target}";
             return $"DSH-Sharp：{DshSharpCompatibility.ProductVersion}\nDSH 私有运行版本：{installed ?? "未安装"}\nnpm 最新版本：{latest}\n支持范围：{DshSharpCompatibility.SupportedRange}\n兼容状态：{status}";
         }
         catch (Exception ex)
@@ -815,7 +864,11 @@ public partial class App : Application
             string? targetVersion;
             try
             {
-                targetVersion = await (_apiClient ?? new DshApiClient(_authSession ?? new DshAuthSession(RuntimeBaseUrl))).GetNpmLatestVersionAsync();
+                // npm latest 标签可能仍指向旧的稳定线（如 0.1.2-rc.1），而官方最新发布挂在
+                // next/alpha 标签上；目标版本优先取 latest，不在支持范围时回退到客户端
+                // 最新已验证版本（DefaultDshVersion 恒在白名单内）。
+                var latest = await (_apiClient ?? new DshApiClient(_authSession ?? new DshAuthSession(RuntimeBaseUrl))).GetNpmLatestVersionAsync();
+                targetVersion = DshSharpCompatibility.IsCompatible(latest) ? latest : DshSharpCompatibility.DefaultDshVersion;
             }
             catch (Exception ex)
             {
@@ -825,7 +878,7 @@ public partial class App : Application
 
             if (!DshSharpCompatibility.IsCompatible(targetVersion))
             {
-                _mainWindow?.ShowNotification("DSH 更新已阻止", $"npm 版本 {targetVersion ?? "未知"} 不在支持范围 {DshSharpCompatibility.SupportedRange} 内");
+                _mainWindow?.ShowNotification("DSH 更新已阻止", $"目标版本 {targetVersion ?? "未知"} 不在支持范围 {DshSharpCompatibility.SupportedRange} 内");
                 return;
             }
 

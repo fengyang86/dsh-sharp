@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using DSHSharp.Core.Configuration;
@@ -116,6 +117,8 @@ public partial class SettingsViewModel : ViewModelBase
     private readonly Func<IReadOnlyList<DSHSharp.Core.Dsh.DshServiceManager.ProfilePlugin>> _listPlugins;
     private readonly Func<string, bool, Task<bool>> _setPluginActive;
     private readonly Func<string, Task<bool>> _removePlugin;
+    private readonly DSHSharp.Core.Services.ClientUpdateService? _clientUpdate;
+    private readonly Action _installClientUpdate;
 
     public SettingsViewModel(
         AppSettings settings,
@@ -127,7 +130,9 @@ public partial class SettingsViewModel : ViewModelBase
         Action? updateService = null,
         Func<IReadOnlyList<DSHSharp.Core.Dsh.DshServiceManager.ProfilePlugin>>? listPlugins = null,
         Func<string, bool, Task<bool>>? setPluginActive = null,
-        Func<string, Task<bool>>? removePlugin = null)
+        Func<string, Task<bool>>? removePlugin = null,
+        DSHSharp.Core.Services.ClientUpdateService? clientUpdate = null,
+        Action? installClientUpdate = null)
     {
         ArgumentNullException.ThrowIfNull(settings);
         _settings = settings;
@@ -139,6 +144,8 @@ public partial class SettingsViewModel : ViewModelBase
         _listPlugins = listPlugins ?? (() => []);
         _setPluginActive = setPluginActive ?? ((_, _) => Task.FromResult(false));
         _removePlugin = removePlugin ?? (_ => Task.FromResult(false));
+        _clientUpdate = clientUpdate;
+        _installClientUpdate = installClientUpdate ?? (() => { });
         RefreshPlugins();
 
         _serviceStatusText = serviceStatusText;
@@ -151,7 +158,14 @@ public partial class SettingsViewModel : ViewModelBase
         SessionPluginCopyIdEnabled = settings.SessionPluginCopyIdEnabled;
         SessionPluginOpenWorkspaceEnabled = settings.SessionPluginOpenWorkspaceEnabled;
         SessionPluginTrayNavigationEnabled = settings.SessionPluginTrayNavigationEnabled;
+        ClientUpdateCheckEnabled = settings.ClientUpdateCheckEnabled;
         Theme = settings.Theme;
+
+        if (_clientUpdate is not null)
+        {
+            _clientUpdate.StateChanged += OnClientUpdateStateChanged;
+            ApplyClientUpdateState(_clientUpdate.State);
+        }
 
         ProfileHelper.EnsureDefaultProfile(settings);
         foreach (var profile in settings.Profiles)
@@ -275,6 +289,7 @@ public partial class SettingsViewModel : ViewModelBase
         _settings.StartMinimized = StartMinimized;
         _settings.SessionCompleteNotifications = SessionCompleteNotifications;
         _settings.NotificationSoundEnabled = NotificationSoundEnabled;
+        _settings.ClientUpdateCheckEnabled = ClientUpdateCheckEnabled;
         _settings.Theme = Theme;
 
         _save(_settings);
@@ -374,6 +389,99 @@ public partial class SettingsViewModel : ViewModelBase
 
     [RelayCommand]
     private void UpdateService() => _updateService();
+
+    // ---- 客户端自更新 ----
+
+    [ObservableProperty]
+    private bool _clientUpdateCheckEnabled;
+
+    [ObservableProperty]
+    private string _clientUpdatePhase = "Idle";
+
+    [ObservableProperty]
+    private int _clientUpdatePercent;
+
+    [ObservableProperty]
+    private string? _clientUpdateVersion;
+
+    [ObservableProperty]
+    private string? _clientUpdateError;
+
+    /// <summary>客户端更新状态行（跟随 Phase/版本/错误变化）。</summary>
+    [ObservableProperty]
+    private string _clientUpdateStatusText = "尚未检查客户端更新。";
+
+    /// <summary>下载进度条可见性。</summary>
+    public bool ClientUpdateDownloading => ClientUpdatePhase is "Downloading" or "Checking";
+
+    /// <summary>“升级并重启”按钮可见性（下载就绪）。</summary>
+    public bool ClientUpdateReady => ClientUpdatePhase == "Ready";
+
+    /// <summary>“重试”按钮可见性（检查或下载失败）。</summary>
+    public bool ClientUpdateRetryable => ClientUpdatePhase is "CheckFailed" or "DownloadFailed";
+
+    /// <summary>进度条数值（下载中为百分比，检查中为不定进度）。</summary>
+    public bool ClientUpdateIndeterminate => ClientUpdatePhase == "Checking";
+
+    private void OnClientUpdateStateChanged(object? sender, DSHSharp.Core.Services.ClientUpdateState state)
+    {
+        Dispatcher.UIThread.Post(() => ApplyClientUpdateState(state));
+    }
+
+    private void ApplyClientUpdateState(DSHSharp.Core.Services.ClientUpdateState state)
+    {
+        ClientUpdatePhase = state.Phase;
+        ClientUpdatePercent = state.DownloadPercent;
+        ClientUpdateVersion = state.LatestVersion;
+        ClientUpdateError = state.Error;
+        ClientUpdateStatusText = state.Phase switch
+        {
+            "Checking" => "正在检查客户端更新…",
+            "UpToDate" => $"客户端已是最新（v{DshSharpCoreProductVersion}）。",
+            "Available" => $"发现新版本 v{state.LatestVersion}，正在后台下载升级包…",
+            "Downloading" => $"正在下载 v{state.LatestVersion} 升级包… {state.DownloadPercent}%",
+            "Ready" => $"v{state.LatestVersion} 已就绪，点击“升级并重启”完成安装。",
+            "CheckFailed" => state.Error ?? "检查更新失败。",
+            "DownloadFailed" => state.Error ?? "下载更新失败。",
+            _ => "尚未检查客户端更新。",
+        };
+        OnPropertyChanged(nameof(ClientUpdateDownloading));
+        OnPropertyChanged(nameof(ClientUpdateReady));
+        OnPropertyChanged(nameof(ClientUpdateRetryable));
+        OnPropertyChanged(nameof(ClientUpdateIndeterminate));
+        InstallClientUpdateCommand.NotifyCanExecuteChanged();
+        RetryClientUpdateCommand.NotifyCanExecuteChanged();
+        CheckClientUpdateNowCommand.NotifyCanExecuteChanged();
+    }
+
+    private bool CanInstallClientUpdate => ClientUpdateReady;
+
+    /// <summary>当前客户端版本（DSHSharpCompatibility.ProductVersion）。</summary>
+    public string DshSharpCoreProductVersion => DSHSharp.Core.Compatibility.DshSharpCompatibility.ProductVersion;
+
+    [RelayCommand(CanExecute = nameof(CanInstallClientUpdate))]
+    private void InstallClientUpdate() => _installClientUpdate();
+
+    private bool CanRetryClientUpdate => ClientUpdateRetryable;
+
+    [RelayCommand(CanExecute = nameof(CanRetryClientUpdate))]
+    private void RetryClientUpdate()
+    {
+        if (_clientUpdate is null) return;
+        var retry = ClientUpdatePhase == "DownloadFailed"
+            ? _clientUpdate.DownloadAsync()
+            : _clientUpdate.CheckAsync();
+        _ = Task.Run(() => retry);
+    }
+
+    private bool CanCheckClientUpdateNow => ClientUpdatePhase is "Idle" or "UpToDate" or "CheckFailed" or "DownloadFailed";
+
+    [RelayCommand(CanExecute = nameof(CanCheckClientUpdateNow))]
+    private void CheckClientUpdateNow()
+    {
+        if (_clientUpdate is null) return;
+        _ = Task.Run(() => _clientUpdate.CheckAsync());
+    }
 
     public ObservableCollection<PluginItem> Plugins { get; } = [];
 

@@ -51,6 +51,9 @@ public sealed class AppSettings
     public bool SessionPluginOpenWorkspaceEnabled { get; set; } = true;
     public bool SessionPluginTrayNavigationEnabled { get; set; } = true;
 
+    /// <summary>启动时自动检查客户端更新并后台预下载升级包。</summary>
+    public bool ClientUpdateCheckEnabled { get; set; } = true;
+
     /// <summary>
     /// 旧版托管模式字段。仅用于读取和迁移历史 settings.json。
     /// </summary>

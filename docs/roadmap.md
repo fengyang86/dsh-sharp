@@ -21,13 +21,17 @@
 - 首次迁移仅复制旧 `~/.dsh` 的可迁移数据；会话、插件与凭据分别确认，旧目录不删除
 - 插件兼容性状态与 Runtime 更新结果联动展示
 
+## 已实现（0.2.3）
+
+- 客户端自更新：GitHub Releases 检查 + 后台预下载（百分比进度）+ 一键升级重启（新 EXE 自安装）
+- 支持 DSH 0.1.5-alpha.2（Session V3 由 host 自动迁移；bin.js 的 import.meta.main 依赖由客户端 CLI wrapper 适配）
+
 ## 待评估（未确认）
 
 - 会话导出（`session.export` RPC → 本地 jsonl）
 - Windows 系统通知（通知中心/锁屏，接 WinRT AppNotifications）
 - 全局热键（任意程序呼出/隐藏）
 - `dsh://` URL 协议唤起
-- 客户端自动更新（GitHub Releases）
 - WebView 前进/后退/刷新按钮（标题栏）
 - **npm 镜像源配置**：官方包下载较慢的环境可配置 npmmirror 镜像（注入 npm_config_registry）
 - **官方包预下载预热**：服务在线空闲时后台安装私有包，切到 Npx 模式时快速启动

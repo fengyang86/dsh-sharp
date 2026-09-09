@@ -131,9 +131,28 @@
                     <TextBlock Text="版本与更新" FontSize="16" FontWeight="SemiBold"/>
                     <TextBlock Text="DSH-Sharp 客户端" FontSize="14" FontWeight="SemiBold" Margin="0,6,0,0"/>
                     <TextBlock Text="{Binding AboutText}" FontSize="13" LineHeight="22" TextWrapping="Wrap"/>
-                    <TextBlock Text="客户端与 DSH Runtime 独立发布。当前客户端仅显示版本信息，不自动下载或安装客户端更新。"
-                               FontSize="12" TextWrapping="Wrap" LineHeight="18"
-                               Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+                    <StackPanel Spacing="6" x:CompileBindings="False">
+                        <TextBlock Text="{Binding ClientUpdateStatusText}" FontSize="12" TextWrapping="Wrap" LineHeight="18"
+                                   Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+                        <ProgressBar IsVisible="{Binding ClientUpdateDownloading}"
+                                     IsIndeterminate="{Binding ClientUpdateIndeterminate}"
+                                     Maximum="100" Value="{Binding ClientUpdatePercent}" Height="4"/>
+                        <TextBlock Text="{Binding ClientUpdateError}" FontSize="12" TextWrapping="Wrap"
+                                   IsVisible="{Binding ClientUpdateRetryable}"
+                                   Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button Content="升级并重启" Padding="14,5"
+                                    IsVisible="{Binding ClientUpdateReady}"
+                                    Command="{Binding InstallClientUpdateCommand}"/>
+                            <Button Content="重试" Padding="14,5"
+                                    IsVisible="{Binding ClientUpdateRetryable}"
+                                    Command="{Binding RetryClientUpdateCommand}"/>
+                            <Button Content="检查客户端更新" Padding="14,5"
+                                    Command="{Binding CheckClientUpdateNowCommand}"/>
+                        </StackPanel>
+                        <ToggleSwitch Content="自动检查客户端更新并预下载升级包"
+                                      IsChecked="{Binding ClientUpdateCheckEnabled}" Margin="0,2,0,0"/>
+                    </StackPanel>
                     <Separator Margin="0,4"/>
                     <TextBlock Text="DSH Runtime" FontSize="14" FontWeight="SemiBold"/>
                     <TextBlock Text="DSH Runtime 由独立 npm 包发布，安装在 DSH-Sharp 私有目录中。客户端与运行时分别发布和更新；运行时更新不会清除私有会话、插件和设置。"

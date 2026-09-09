@@ -20,6 +20,10 @@
   - 失败诊断：Runtime 启动页显示重试与服务日志尾部（`dsh-service.log`）
 - **自启动**：注册 HKCU Run 键，`--autostart` 静默驻留托盘
 
+### 客户端自更新
+- **后台预下载**：启动时自动检查 GitHub Releases（可关闭），发现新版本后台下载升级包并显示百分比进度，SHA256 校验
+- **一键升级**：下载就绪后点击"升级并重启"，由新版本 EXE 自安装（等旧实例退出 → 覆盖安装目录 → 重启），用户数据不受影响
+
 ### 通知与监控
 - **会话完成通知**：订阅 DSH 事件流（DSH 0.1.2+ 为 `remote.mux` 逻辑流，旧版为 `events.mux`），会话 running 翻转 → 置顶 Toast（会话名 + 回复开头预览）+ 系统提示音 + 托盘驻留时自动唤起窗口
 - **浏览器认证适配**：DSH 0.1.2+ 的 token→cookie 认证由客户端统一兑换，WebView、HTTP RPC 与事件流共享同一会话；runtime 重启后自动重交换
@@ -46,7 +50,7 @@
 | Avalonia | 12.1（Fluent 主题，`WindowDecorations` 自绘标题栏） |
 | 内嵌 WebView | [Avalonia.Controls.WebView](https://www.nuget.org/packages/Avalonia.Controls.WebView) 12.1（WebView2 / WebKit / WebKitGTK） |
 | MVVM | CommunityToolkit.Mvvm |
-| 单元测试 | xUnit（75 项）+ Vitest（8 项） |
+| 单元测试 | xUnit（95 项）+ Vitest（15 项） |
 
 ## 解决方案结构
 
