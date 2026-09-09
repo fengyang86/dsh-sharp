@@ -56,14 +56,36 @@ public sealed class DshApiClient
         return DshRpcParser.ParsePageRecords(json) ?? DshRpcParser.ParseLastAssistantText(json);
     }
 
-    /// <summary>查询 npm 上 @deepseek-ai/dsh 的最新稳定版本（registry /latest）。</summary>
+    /// <summary>
+    /// 查询 npm 上 @deepseek-ai/dsh 的最新稳定版本。受限网络环境依次尝试
+    /// 官方 registry 与 npmmirror 镜像（各经 HttpFallback 回退链）。
+    /// </summary>
     public async Task<string?> GetNpmLatestVersionAsync(CancellationToken ct = default)
     {
-        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
-        using var response = await http.GetAsync("https://registry.npmjs.org/@deepseek-ai/dsh/latest", ct);
-        response.EnsureSuccessStatusCode();
-        var json = await response.Content.ReadAsStringAsync(ct);
-        return DshRpcParser.ParseNpmLatestVersion(json);
+        foreach (var registry in new[]
+                 {
+                     "https://registry.npmjs.org/@deepseek-ai/dsh/latest",
+                     "https://registry.npmmirror.com/@deepseek-ai/dsh/latest",
+                 })
+        {
+            try
+            {
+                using var response = await Services.HttpFallback.GetAsync(registry, RequestTimeout, ct: ct);
+                response.EnsureSuccessStatusCode();
+                var json = await response.Content.ReadAsStringAsync(ct);
+                var version = DshRpcParser.ParseNpmLatestVersion(json);
+                if (version is not null)
+                {
+                    return version;
+                }
+            }
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or InvalidOperationException)
+            {
+                // 官方源不可达时继续尝试镜像。
+            }
+        }
+
+        return null;
     }
 
     /// <summary>方法名常量：DSH 0.1.2+ 为斜杠命名，旧版为点号命名。</summary>

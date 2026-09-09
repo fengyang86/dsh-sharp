@@ -214,62 +214,67 @@ public sealed class ClientUpdateService
         (string DownloadUrl, long SizeBytes, string? Sha256)? Asset)?> FetchLatestReleaseAsync(
         CancellationToken ct)
     {
-        using var http = CreateHttpClient(CheckTimeout);
-        using var request = new HttpRequestMessage(HttpMethod.Get,
-            $"https://api.github.com/repos/{UpdateRepository}/releases/latest");
-        request.Headers.UserAgent.Add(new ProductInfoHeaderValue("DSHSharp", DshSharpCompatibility.ProductVersion));
-        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
-        using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
-        if (!response.IsSuccessStatusCode)
+        try
         {
-            Log?.Invoke($"release check failed: HTTP {(int)response.StatusCode}");
-            return null;
-        }
-
-        await using var stream = await response.Content.ReadAsStreamAsync(ct);
-        using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
-        var root = doc.RootElement;
-        if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("tag_name", out var tagEl))
-        {
-            return null;
-        }
-
-        (string, long, string?)? asset = null;
-        if (root.TryGetProperty("assets", out var assets) && assets.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var item in assets.EnumerateArray())
+            var requestUri = $"https://api.github.com/repos/{UpdateRepository}/releases/latest";
+            var userAgent = $"DSHSharp/{DshSharpCompatibility.ProductVersion}";
+            // GitHub API 必须携带 User-Agent；回退链：直连 → 系统代理 → git 配置代理 → 常见本地代理端口。
+            using var response = await HttpFallback.GetAsync(requestUri, CheckTimeout, userAgent, ct);
+            if (!response.IsSuccessStatusCode)
             {
-                if (item.TryGetProperty("name", out var nameEl) &&
-                    nameEl.GetString()?.Contains("win-x64", StringComparison.OrdinalIgnoreCase) == true &&
-                    item.TryGetProperty("browser_download_url", out var urlEl))
-                {
-                    var size = item.TryGetProperty("size", out var sizeEl) && sizeEl.ValueKind == JsonValueKind.Number
-                        ? sizeEl.GetInt64()
-                        : 0L;
-                    string? sha = null;
-                    if (item.TryGetProperty("digest", out var digestEl) &&
-                        digestEl.GetString() is { } digest &&
-                        digest.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase))
-                    {
-                        sha = digest["sha256:".Length..];
-                    }
+                Log?.Invoke($"release check failed: HTTP {(int)response.StatusCode}");
+                return null;
+            }
 
-                    asset = (urlEl.GetString()!, size, sha);
-                    break;
+            await using var stream = await response.Content.ReadAsStreamAsync(ct);
+            using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("tag_name", out var tagEl))
+            {
+                return null;
+            }
+
+            (string, long, string?)? asset = null;
+            if (root.TryGetProperty("assets", out var assets) && assets.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in assets.EnumerateArray())
+                {
+                    if (item.TryGetProperty("name", out var nameEl) &&
+                        nameEl.GetString()?.Contains("win-x64", StringComparison.OrdinalIgnoreCase) == true &&
+                        item.TryGetProperty("browser_download_url", out var urlEl))
+                    {
+                        var size = item.TryGetProperty("size", out var sizeEl) && sizeEl.ValueKind == JsonValueKind.Number
+                            ? sizeEl.GetInt64()
+                            : 0L;
+                        string? sha = null;
+                        if (item.TryGetProperty("digest", out var digestEl) &&
+                            digestEl.GetString() is { } digest &&
+                            digest.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase))
+                        {
+                            sha = digest["sha256:".Length..];
+                        }
+
+                        asset = (urlEl.GetString()!, size, sha);
+                        break;
+                    }
                 }
             }
-        }
 
-        return (
-            tagEl.GetString() ?? string.Empty,
-            root.TryGetProperty("body", out var bodyEl) ? bodyEl.GetString() ?? string.Empty : string.Empty,
-            asset);
+            return (
+                tagEl.GetString() ?? string.Empty,
+                root.TryGetProperty("body", out var bodyEl) ? bodyEl.GetString() ?? string.Empty : string.Empty,
+                asset);
+        }
+        catch (HttpRequestException ex)
+        {
+            Log?.Invoke($"release check failed: {ex.Message}");
+            return null;
+        }
     }
 
     private async Task<string?> DownloadFileAsync(string url, string targetPath, long totalBytes, CancellationToken ct)
     {
-        using var http = CreateHttpClient(DownloadTimeout);
-        using var response = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
+        using var response = await HttpFallback.GetAsync(url, DownloadTimeout, userAgent: $"DSHSharp/{DshSharpCompatibility.ProductVersion}", ct: ct);
         if (!response.IsSuccessStatusCode)
         {
             SetState(_state with { Phase = "DownloadFailed", Error = $"下载失败：HTTP {(int)response.StatusCode}" });
@@ -305,10 +310,9 @@ public sealed class ClientUpdateService
         return written > 0 ? targetPath : null;
     }
 
-    /// <summary>创建 GitHub 访问客户端：直连（带超时），失败场景由调用方重试系统代理。</summary>
+    /// <summary>创建 GitHub 访问客户端（保留供诊断/测试使用；运行时走 <see cref="HttpFallback"/> 回退链）。</summary>
     internal static HttpClient CreateHttpClient(TimeSpan timeout) => new(new SocketsHttpHandler
     {
-        // GitHub 访问依赖网络环境；允许系统代理（Windows 下默认读取系统设置）。
         UseProxy = true,
         AutomaticDecompression = System.Net.DecompressionMethods.All,
         ConnectTimeout = timeout,

@@ -441,8 +441,8 @@ public partial class SettingsViewModel : ViewModelBase
             "Available" => $"发现新版本 v{state.LatestVersion}，正在后台下载升级包…",
             "Downloading" => $"正在下载 v{state.LatestVersion} 升级包… {state.DownloadPercent}%",
             "Ready" => $"v{state.LatestVersion} 已就绪，点击“升级并重启”完成安装。",
-            "CheckFailed" => state.Error ?? "检查更新失败。",
-            "DownloadFailed" => state.Error ?? "下载更新失败。",
+            "CheckFailed" => "客户端更新检查失败，请检查网络后点击“重试”。",
+            "DownloadFailed" => "升级包下载失败，请检查网络后点击“重试”。",
             _ => "尚未检查客户端更新。",
         };
         OnPropertyChanged(nameof(ClientUpdateDownloading));
