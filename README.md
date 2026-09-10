@@ -50,7 +50,7 @@
 | Avalonia | 12.1（Fluent 主题，`WindowDecorations` 自绘标题栏） |
 | 内嵌 WebView | [Avalonia.Controls.WebView](https://www.nuget.org/packages/Avalonia.Controls.WebView) 12.1（WebView2 / WebKit / WebKitGTK） |
 | MVVM | CommunityToolkit.Mvvm |
-| 单元测试 | xUnit（95 项）+ Vitest（15 项） |
+| 单元测试 | xUnit（89 项）+ Vitest（20 项） |
 
 ## 解决方案结构
 

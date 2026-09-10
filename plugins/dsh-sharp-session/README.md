@@ -29,4 +29,6 @@ DSH-Sharp 会自动把发布目录中的插件链接到其私有 Runtime 的 `we
 
 插件的 bundle 补丁只负责把自身加入 DSH Loader；浏览器端通过 DSH 公共 `sessions` 服务读取当前会话，并调用公开的 `session.cancel()`。插件卸载或热重载时会同步移除文档级键盘监听器。
 
-工作区打开动作使用 DSH 官方 `workspaces.openPath(path)` 服务；其底层 `host.openPath` 会按平台调用 Windows `Invoke-Item`、macOS `open` 或 Linux `xdg-open`。当前 DSH 尚未提供工作区行级菜单贡献插槽或稳定的行标识，插件只会在目录名唯一时显示工作区右键菜单；重名目录不显示该动作，避免误打开错误路径。会话右键未选中行会先调用官方行的选中动作，再从 `sessions` 服务读取精确会话 ID，不按标题猜测。
+工作区打开动作经官方 Connection RPC 调用 Host 的 `session/openWorkspacePath`：DSH 没有客户端 `workspaces.openPath` 服务（该能力只存在于 Host 内部），浏览器侧必须走 `ctx.connection.rpc.call('/api', 'session/openWorkspacePath', { args: { request: { path } } })`，底层由 `host` 按平台调用 Windows 资源管理器、macOS Finder 或 Linux 文件管理器。当前 DSH 尚未提供工作区行级菜单贡献插槽或稳定的行标识，插件只会在目录名唯一时显示工作区右键菜单；重名目录不显示该动作，避免误打开错误路径。会话右键未选中行会先调用官方行的选中动作，再从 `sessions` 服务读取精确会话 ID，不按标题猜测。
+
+插件注入 `slots`、`sessions`、`workspaces` 与 `connection` 四个客户端服务；DSH 0.1.5 移除 `ctx.agent` 与 Inbox 类导出，本插件不依赖它们。

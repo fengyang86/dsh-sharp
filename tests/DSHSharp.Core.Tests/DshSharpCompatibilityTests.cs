@@ -9,6 +9,7 @@ public sealed class DshSharpCompatibilityTests
     [InlineData("0.1.1-rc.2")]
     [InlineData("0.1.2-rc.1")]
     [InlineData("0.1.5-alpha.2")]
+    [InlineData("0.1.5-rc.1")]
     public void AcceptsVersionsInsideContract(string version)
         => Assert.True(DshSharpCompatibility.IsCompatible(version));
 
@@ -19,6 +20,7 @@ public sealed class DshSharpCompatibilityTests
     [InlineData("0.1.3-alpha.1")]
     [InlineData("0.1.3-alpha.2")]
     [InlineData("0.1.5-alpha.1")]
+    [InlineData("0.1.5-rc.2")]
     [InlineData("0.1.5")]
     [InlineData("not-a-version")]
     [InlineData(null)]

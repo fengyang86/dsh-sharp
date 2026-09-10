@@ -6,10 +6,12 @@ DSH-Sharp 与 DSH 是两个独立发布物，不能把客户端版本当成服�
 
 | 发布物 | 当前版本 | 说明 |
 | --- | --- | --- |
-| DSH-Sharp 客户端 | `0.2.3` | 桌面壳、服务托管与插件宿主、客户端自更新 |
+| DSH-Sharp 客户端 | `0.2.4` | 桌面壳、服务托管与插件宿主、客户端自更新 |
 | DSH | 仅已验证版本 | 客户端声明的支持范围 |
 
-已验证 DSH 版本：`0.1.0-rc.8`、`0.1.1-rc.2`、`0.1.2-rc.1`、`0.1.5-alpha.2`。验证覆盖 token→cookie 浏览器认证、HTTP RPC（`session/list`、`session/page`）与 `remote.mux` 事件流；旧版方法名（`session.list`、`session.history`）与 `events.mux` 事件流在运行时自动回退。0.1.5-alpha.2 的 bin.js 依赖 `import.meta.main` 自分发（Node < 23 恒为 undefined），客户端通过显式调用 `runCli()` 的 wrapper 启动。Session 数据格式 V3 由 host 端自动迁移，旧会话对客户端透明。中间版本（`0.1.3-alpha.x`、`0.1.5-alpha.1`）未验证、不在支持范围内。
+已验证 DSH 版本：`0.1.0-rc.8`、`0.1.1-rc.2`、`0.1.2-rc.1`、`0.1.5-alpha.2`、`0.1.5-rc.1`。验证覆盖 token→cookie 浏览器认证、HTTP RPC（`session/list`、`session/page`、`session/openWorkspacePath`）与 `remote.mux` 事件流；旧版方法名（`session.list`、`session.history`）与 `events.mux` 事件流在运行时自动回退。0.1.5 系列的 bin.js 依赖 `import.meta.main` 自分发（Node < 23 恒为 undefined），客户端通过显式调用 `runCli()` 的 wrapper 启动。Session 数据格式 V3 由 host 端自动迁移，旧会话对客户端透明。中间版本（`0.1.3-alpha.x`、`0.1.5-alpha.1`、`0.1.5-rc.2+`）未验证、不在支持范围内。
+
+> V3 会话不支持降级读取。升级 Runtime 后若回滚到 0.1.2 及更早版本，迁移后的会话可能无法被旧版本读取（原文件在迁移时保留）。
 
 ## 设置页显示
 

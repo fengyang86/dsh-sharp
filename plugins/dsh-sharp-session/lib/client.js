@@ -104,6 +104,20 @@ window.__ModuleLoader__.load({
 			};
 		}
 		//#endregion
+		//#region src/client/workspace-open.ts
+		/**
+		* 在系统文件管理器中打开一个工作区目录。
+		*
+		* DSH 没有客户端 `workspaces.openPath` 服务（该方法只存在于 Host 内部）；
+		* 官方浏览器侧入口是 Remote RPC `session/openWorkspacePath`，经 Connection
+		* carrier 调用，底层由 Host 按平台适配（Windows 资源管理器 / macOS Finder /
+		* Linux 文件管理器）。省略 action 即“打开目录”语义（`reveal` 仅定位）。
+		*/
+		async function openWorkspacePath(connection, path) {
+			const result = await connection.rpc.call("/api", "session/openWorkspacePath", { args: { request: { path } } });
+			if (!result.ok) throw new Error(result.error.message || result.error.code);
+		}
+		//#endregion
 		//#region src/client/ContextMenuView.tsx
 		const COPY_SESSION_ITEM = {
 			id: "copy-session-id",
@@ -208,11 +222,12 @@ window.__ModuleLoader__.load({
 		}
 		//#endregion
 		//#region src/client/index.ts
-		/** 所需服务：DSH 浏览器运行时的会话服务。 */
+		/** 所需服务：DSH 浏览器运行时的会话、连接、插槽与工作区服务。 */
 		const inject = [
 			"slots",
 			"sessions",
-			"workspaces"
+			"workspaces",
+			"connection"
 		];
 		/**
 		* 注册浏览器端快捷键，并让监听器跟随插件生命周期卸载。
@@ -228,7 +243,7 @@ window.__ModuleLoader__.load({
 				order: 100,
 				store: createMenuStore(),
 				inject: () => ({
-					openWorkspace: (path) => ctx.workspaces.openPath(path),
+					openWorkspace: (path) => openWorkspacePath(ctx.connection, path),
 					features,
 					getSessionSnapshot: () => ctx.sessions.list.getSnapshot(),
 					getWorkspaceItems: () => ctx.workspaces.list.getSnapshot().items

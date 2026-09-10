@@ -4,20 +4,31 @@ namespace DSHSharp.Core.Tests;
 
 public sealed class ClientUpdateServiceTests
 {
-    [Theory]
-    [InlineData("0.2.4", true)]
-    [InlineData("v0.2.4", true)]
-    [InlineData("0.10.0", true)]
-    [InlineData("0.2.3", false)]
-    [InlineData("v0.2.3", false)]
-    [InlineData("0.2.2", false)]
-    [InlineData("0.2.1", false)]
-    [InlineData("not-a-version", false)]
-    [InlineData(null, false)]
-    [InlineData("", false)]
-    public void IsNewerThanCurrent_ComparesAgainstProductVersion(string? latest, bool expected)
+    [Fact]
+    public void IsNewerThanCurrent_DetectsNewerVersions()
     {
-        Assert.Equal(expected, ClientUpdateService.IsNewerThanCurrent(latest));
+        // 从当前 ProductVersion 推导“更新一版”，避免随发版硬编码。
+        var current = Version.Parse(DSHSharp.Core.Compatibility.DshSharpCompatibility.ProductVersion);
+        var next = new Version(current.Major, current.Minor, current.Build + 1);
+        var majorAhead = new Version(current.Major + 1, 0, 0);
+
+        Assert.True(ClientUpdateService.IsNewerThanCurrent(next.ToString()));
+        Assert.True(ClientUpdateService.IsNewerThanCurrent($"v{next}"));
+        Assert.True(ClientUpdateService.IsNewerThanCurrent(majorAhead.ToString()));
+    }
+
+    [Fact]
+    public void IsNewerThanCurrent_RejectsSameOlderOrInvalid()
+    {
+        var current = Version.Parse(DSHSharp.Core.Compatibility.DshSharpCompatibility.ProductVersion);
+        var older = new Version(current.Major, current.Minor, Math.Max(current.Build - 1, 0));
+
+        Assert.False(ClientUpdateService.IsNewerThanCurrent(current.ToString()));
+        Assert.False(ClientUpdateService.IsNewerThanCurrent($"v{current}"));
+        Assert.False(ClientUpdateService.IsNewerThanCurrent(older.ToString()));
+        Assert.False(ClientUpdateService.IsNewerThanCurrent("not-a-version"));
+        Assert.False(ClientUpdateService.IsNewerThanCurrent(null));
+        Assert.False(ClientUpdateService.IsNewerThanCurrent(""));
     }
 
     [Fact]

@@ -24,7 +24,8 @@
 ## 已实现（0.2.3）
 
 - 客户端自更新：GitHub Releases 检查 + 后台预下载（百分比进度）+ 一键升级重启（新 EXE 自安装）
-- 支持 DSH 0.1.5-alpha.2（Session V3 由 host 自动迁移；bin.js 的 import.meta.main 依赖由客户端 CLI wrapper 适配）
+- 支持 DSH 0.1.5-rc.1 与 0.1.5-alpha.2（Session V3 由 host 自动迁移；bin.js 的 import.meta.main 依赖由客户端 CLI wrapper 适配）
+- 会话插件工作区打开改用官方 Connection RPC （DSH 无客户端 workspaces.openPath 服务）
 
 ## 待评估（未确认）
 
