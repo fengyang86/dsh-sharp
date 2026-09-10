@@ -14,6 +14,8 @@
 > - 已安装客户端的更新检查仍能正常响应（更新源指向本仓库 Release），显示"已是最新",不会再有新版本
 > - 官方桌面端正式发布后，建议迁移到官方客户端
 >
+> 📄 **DSH 协议与运维笔记见 [ARCHIVE-NOTES.md](ARCHIVE-NOTES.md)** — 开发过程中逆推并实测的认证（token→cookie）、HTTP RPC、`remote.mux` 事件流、插件 API、CLI 启动陷阱等内容集中留档
+>
 > **本机数据清理提示**（迁移或卸载前请先备份）
 >
 > - `%APPDATA%\DSHSharp\dsh-home` — 私有 DSH_HOME（`sessions` 为会话数据、`profiles` 为插件配置）
