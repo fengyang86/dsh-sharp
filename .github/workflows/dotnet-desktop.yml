@@ -37,12 +37,22 @@ jobs:
       - name: Publish Windows package
         if: matrix.configuration == 'Release'
         run: dotnet publish src/DSHSharp/DSHSharp.csproj --configuration Release --framework net10.0-windows10.0.19041.0 --runtime win-x64 --self-contained true --output artifacts/ci/windows-x64 --no-restore
+      - name: Build Windows installer
+        if: matrix.configuration == 'Release'
+        shell: pwsh
+        run: |
+          $ver = (Select-String -Path src/DSHSharp.Core/Compatibility/DshSharpCompatibility.cs -Pattern 'ProductVersion = "([^"]+)"').Matches[0].Groups[1].Value
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { $iscc = "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" }
+          & $iscc packaging/windows/dshsharp.iss /DAppVersion=$ver "/DPayloadDir=$env:GITHUB_WORKSPACE\artifacts\ci\windows-x64" "/DOutputDir=$env:GITHUB_WORKSPACE\artifacts\ci\installer"
       - name: Upload Windows package
         if: matrix.configuration == 'Release'
         uses: actions/upload-artifact@v4
         with:
           name: dsh-sharp-windows-x64
-          path: artifacts/ci/windows-x64
+          path: |
+            artifacts/ci/windows-x64
+            artifacts/ci/installer
 
   plugin:
     name: Session plugin / test

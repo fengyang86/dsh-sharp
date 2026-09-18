@@ -43,7 +43,7 @@ internal static class WindowsTaskbarProgress
     }
 
     [ComImport]
-    [Guid("56fdf344-fd6e-11d0-958a-006097c9a090")]
+    [Guid("56FDF344-FD6D-11d0-958A-006097C9A090")] // CLSID_TaskbarList（注意 FD6D 是 coclass；FD6E 是 IID 家族）
     private class CoTaskbarList
     {
     }

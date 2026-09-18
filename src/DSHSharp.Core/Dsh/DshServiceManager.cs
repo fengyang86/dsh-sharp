@@ -997,6 +997,34 @@ public sealed class DshServiceManager : IDisposable
         }
     }
 
+    /// <summary>随客户端发布的会话插件包名（profile 依赖中的键名）。</summary>
+    private const string BundledSessionPackage = "@yangfeng/dsh-sharp-session";
+
+    /// <summary>构造一条 dsh plugin CLI 调用（node + wrapper + 私有 pnpm PATH；输出按 UTF-8 解码避免路径乱码）。</summary>
+    private ProcessStartInfo CreatePluginCliStartInfo(params string[] args)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "node",
+            WorkingDirectory = _packageDirectory,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8,
+        };
+        ApplyPrivateEnvironment(startInfo);
+        ConfigurePrivatePnpmPath(startInfo);
+        startInfo.ArgumentList.Add(EnsureCliEntryWrapper());
+        foreach (var arg in args)
+        {
+            startInfo.ArgumentList.Add(arg);
+        }
+
+        return startInfo;
+    }
+
     /// <summary>确保随客户端发布的 DSH 插件已链接到 web 配置。</summary>
     private async Task<bool> EnsureBundledPluginsAsync(CancellationToken ct)
     {
@@ -1009,45 +1037,43 @@ public sealed class DshServiceManager : IDisposable
 
         var expectedSpec = $"link:{Path.GetFullPath(_bundledShortcutPluginDirectory).Replace('\\', '/')}";
         var profileManifest = GetWebProfileManifestPath();
-        if (IsProfileDependencyCurrent(profileManifest, "@yangfeng/dsh-sharp-session", expectedSpec))
+        if (IsProfileDependencyCurrent(profileManifest, BundledSessionPackage, expectedSpec))
         {
             return await RemoveLegacyShortcutPluginAsync(profileManifest, ct);
+        }
+
+        // 链接规格变化（客户端迁移目录/重装）时，profile 里旧的 node_modules 链接可能已断：
+        // 悬挂的 junction 会让 pnpm 对依赖的评估直接失败（UNKNOWN: open package.json），
+        // 先卸载旧链接再装新链接，保证任意迁移后可自愈。
+        if (HasProfileDependency(profileManifest, BundledSessionPackage))
+        {
+            AppendLog("--- removing stale bundled plugin link ---");
+            try
+            {
+                var removeExit = await RunInstallProcessAsync(
+                    CreatePluginCliStartInfo("plugin", "--profile", "web", "remove", BundledSessionPackage), ct);
+                if (removeExit != 0)
+                {
+                    LastError = WithLogTail($"内置插件旧链接清理失败（DSH 退出码 {removeExit}）");
+                    return false;
+                }
+            }
+            catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or IOException)
+            {
+                LastError = WithLogTail($"内置插件旧链接清理失败：{ex.Message}");
+                return false;
+            }
         }
 
         AppendLog("--- installing bundled dsh-sharp-session plugin ---");
         try
         {
-            var startInfo = new ProcessStartInfo
+            var exitCode = await RunInstallProcessAsync(
+                CreatePluginCliStartInfo("plugin", "--profile", "web", "add", expectedSpec), ct);
+            if (exitCode != 0 ||
+                !IsProfileDependencyCurrent(profileManifest, BundledSessionPackage, expectedSpec))
             {
-                FileName = "node",
-                WorkingDirectory = _packageDirectory,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-            };
-            ApplyPrivateEnvironment(startInfo);
-            ConfigurePrivatePnpmPath(startInfo);
-            startInfo.ArgumentList.Add(EnsureCliEntryWrapper());
-            startInfo.ArgumentList.Add("plugin");
-            startInfo.ArgumentList.Add("--profile");
-            startInfo.ArgumentList.Add("web");
-            startInfo.ArgumentList.Add("add");
-            startInfo.ArgumentList.Add(expectedSpec);
-
-            using var process = Process.Start(startInfo);
-            if (process is null)
-            {
-                LastError = "无法启动 DSH 插件安装命令";
-                return false;
-            }
-
-            PumpOutput(process);
-            await process.WaitForExitAsync(ct);
-            if (process.ExitCode != 0 ||
-                !IsProfileDependencyCurrent(profileManifest, "@yangfeng/dsh-sharp-session", expectedSpec))
-            {
-                LastError = WithLogTail($"内置快捷键插件安装失败（DSH 退出码 {process.ExitCode}）");
+                LastError = WithLogTail($"内置快捷键插件安装失败（DSH 退出码 {exitCode}）");
                 return false;
             }
 
@@ -1073,25 +1099,8 @@ public sealed class DshServiceManager : IDisposable
         AppendLog("--- removing legacy dsh-shortcuts plugin ---");
         try
         {
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = "node",
-                WorkingDirectory = _packageDirectory,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-            };
-            ApplyPrivateEnvironment(startInfo);
-            ConfigurePrivatePnpmPath(startInfo);
-            startInfo.ArgumentList.Add(EnsureCliEntryWrapper());
-            startInfo.ArgumentList.Add("plugin");
-            startInfo.ArgumentList.Add("--profile");
-            startInfo.ArgumentList.Add("web");
-            startInfo.ArgumentList.Add("remove");
-            startInfo.ArgumentList.Add(legacyPackage);
-
-            var exitCode = await RunInstallProcessAsync(startInfo, ct);
+            var exitCode = await RunInstallProcessAsync(
+                CreatePluginCliStartInfo("plugin", "--profile", "web", "remove", legacyPackage), ct);
             if (exitCode != 0 || HasProfileDependency(profileManifest, legacyPackage))
             {
                 LastError = WithLogTail($"旧快捷键插件迁移失败（DSH 退出码 {exitCode}）");
