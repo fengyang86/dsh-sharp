@@ -480,3 +480,6 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+# DSH upstream source reference clone (not part of this repo)
+external/
