@@ -1,9 +1,23 @@
 # DSH-Sharp 归档说明与 DSH 协议笔记
 
-> 本文件归档于 2026-09-10,记录项目停止维护的原因，以及开发过程中逆推出来的 DSH 协议知识。
+> 本文件最初归档于 2026-09-10,记录项目当时停止维护的原因，以及开发过程中逆推出来的 DSH 协议知识。
 > 这些内容分散在提交历史与当时的排查记录里，集中留档以便后续查考（例如在自己写 DSH 插件、脚本或客户端时）。
+>
+> **2026-09-18 更新：项目已恢复维护。** 复查官方源码（截至 `dsh-v0.1.6-alpha.2`）确认：
+> 官方桌面端 19 个源文件中桌面集成 API 仅命中单实例锁（无托盘/系统通知/开机自启/全局快捷键），
+> 0.1.5-rc.1 以来 23 个桌面相关提交全部是打包签名提速，且至今未公开发布
+> （GitHub Release 0 资产、npm 无 `@deepseek-ai/dsh-desktop`）。
+> 第一节的归档决策据此作废，其余协议笔记继续有效，并新增 0.1.6 实测补充：
 
-## 一、为什么归档
+### 0.1.6-alpha.2 实测补充（2026-09-18）
+
+- **启动行新增可选 LAN 后缀**：绑定全接口时输出 `dsh web: <url> (LAN: <lanUrl>)`（0.1.5-rc.2 起就有此代码，默认仍只绑 127.0.0.1）。客户端解析 URL 必须截取第一个空白分隔段
+- **`/api/remote.mux` 对普通 GET/POST 一律 404**（"Exact WebSocket route"）：不能再用 GET 探测端点存在性，应直接尝试 WS 连接、握手 404 才判旧版
+- **HTTP RPC 客户端信封不变**：`{type:"client-request", rpcId, method, payload:{args:{...}}}` → `{type:"server-response", rpcId, result:{ok,value|error}}`，`session/list`、`session/page`（`@Remote` 装饰器声明）与 `openWorkspacePath` 均原样可用
+- **`import.meta.main` 陷阱依旧**：Node 22.17 直跑 `lib/bin.js` 仍静默退出 0，runCli 包装器仍必需
+- **npm dist-tags**：`latest=0.1.5-rc.2`、`alpha=0.1.6-alpha.2`；`engines.node` 自 0.1.5-rc.1 起即为 `^22.19.0 || >=24`（仅警告不阻断）
+
+## 一、为什么归档（已作废，留档）
 
 DeepSeek 官方已在 `deepseek-ai/deepseek-harness` 仓库内实现自己的 Electron 桌面端：
 
@@ -28,7 +42,7 @@ DSH-Sharp 作为替代性桌面壳的价值已被官方方案覆盖，因此停�
 
 ## 二、DSH 协议笔记
 
-> 适用版本：官方已验证 `0.1.0-rc.8`、`0.1.1-rc.2`、`0.1.2-rc.1`、`0.1.5-alpha.2`、`0.1.5-rc.1`。
+> 适用版本：官方已验证 `0.1.0-rc.8`、`0.1.1-rc.2`、`0.1.2-rc.1`、`0.1.5-alpha.2`、`0.1.5-rc.1`、`0.1.5-rc.2`、`0.1.6-alpha.2`。
 > 下列内容均为在本机私有 Runtime 上实测或从官方源码确认得出。
 
 ### 1. 浏览器认证：token → cookie（0.1.2 起）

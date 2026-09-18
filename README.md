@@ -1,31 +1,21 @@
 # DSH-Sharp
 
-> ## ⚠️ 本项目已归档，停止维护（2026-09-10）
+> ## 📌 项目恢复维护（2026-09-18）
 >
-> DeepSeek 官方已在 `deepseek-ai/deepseek-harness` 仓库内实现自己的 Electron 桌面端
-> （`apps/desktop` 与 `apps/desktop-host`,含打包、代码签名、公证与自动更新链路，
-> 架构决策记录 `2026-08-25-electron-desktop-packaging-and-updates` 标注为 implemented，
-> Windows x64 在目标平台内）。DSH-Sharp 作为替代性桌面壳的价值已被覆盖，因此停止维护。
+> 2026-09-10 曾因官方在 `deepseek-ai/deepseek-harness` 内立项 Electron 桌面端而归档。
+> 复查官方源码（截至 `dsh-v0.1.6-alpha.2`）后确认其桌面壳能力仍然极简：
+> 全部 19 个源文件中桌面集成 API 仅命中单实例锁——**无托盘、无系统通知、无开机自启**，
+> 仅有主窗口 + 插件管理窗口与更新对话框；且官方桌面端至今未公开发布
+> （GitHub Release 无二进制产物、npm 无 `@deepseek-ai/dsh-desktop`）。
+> DSH-Sharp 的桌面体验优势仍在，因此恢复维护。
 >
-> **当前状态**
->
-> - 仓库转为只读：不再接受提交、Issue 与 Pull Request，CI 不再运行
-> - 源码与历史 Release 保持公开可访问，`v0.2.4` 及此前的安装包仍可下载
-> - 已安装客户端的更新检查仍能正常响应（更新源指向本仓库 Release），显示"已是最新",不会再有新版本
-> - 官方桌面端正式发布后，建议迁移到官方客户端
+> - 仓库已重新开放，恢复提交与 CI
+> - 已验证兼容 DSH `0.1.6-alpha.2` 与 `0.1.5-rc.2`（完整验证清单见 [DshSharpCompatibility.cs](src/DSHSharp.Core/Compatibility/DshSharpCompatibility.cs)）
 >
 > 📄 **DSH 协议与运维笔记见 [ARCHIVE-NOTES.md](ARCHIVE-NOTES.md)** — 开发过程中逆推并实测的认证（token→cookie）、HTTP RPC、`remote.mux` 事件流、插件 API、CLI 启动陷阱等内容集中留档
->
-> **本机数据清理提示**（迁移或卸载前请先备份）
->
-> - `%APPDATA%\DSHSharp\dsh-home` — 私有 DSH_HOME（`sessions` 为会话数据、`profiles` 为插件配置）
-> - `%APPDATA%\DSHSharp\dsh-runtime` — 私有 DSH Runtime（npm 依赖，约 270 MB，可直接删除）
-> - 若不需要再自启动，请先在设置页关闭"登录时自启动"再删除安装目录
 
 > DeepSeek Harness（DSH）的桌面客户端壳，基于 **.NET 10 + Avalonia** 构建。
 > 目标不是重写 WebUI，而是为 DSH WebUI 提供桌面级体验：内嵌浏览器壳 + 服务托管 + 自启动 + 托盘 + 会话完成通知等。
-
-> 以下为归档前的项目说明，保留备查。
 
 ## 功能全景
 
