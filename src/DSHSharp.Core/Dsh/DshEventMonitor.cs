@@ -40,7 +40,6 @@ public sealed class DshEventMonitor : IAsyncDisposable
     private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan BackoffMin = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan BackoffMax = TimeSpan.FromSeconds(30);
-    private static readonly TimeSpan MuxExistsProbeTimeout = TimeSpan.FromSeconds(3);
 
     /// <summary>可选的日志回调（由宿主注入，便于排查）。</summary>
     public static Action<string>? Log { get; set; }
@@ -135,8 +134,7 @@ public sealed class DshEventMonitor : IAsyncDisposable
         {
             try
             {
-                using var ws = new ClientWebSocket();
-                await ConnectStreamAsync(ws, ct);
+                using var ws = await ConnectStreamAsync(ct);
                 backoff = BackoffMin;
                 await PumpStreamAsync(ws, ct);
             }
@@ -173,16 +171,45 @@ public sealed class DshEventMonitor : IAsyncDisposable
     }
 
     /// <summary>建立事件流连接：优先 DSH 0.1.2+ 的 remote.mux 逻辑流，旧版回退 events.mux。</summary>
-    private async Task ConnectStreamAsync(ClientWebSocket ws, CancellationToken ct)
+    /// <remarks>DSH 0.1.6 起对 <c>/api/remote.mux</c> 的普通 GET 也返回 404，端点存在性无法再用 GET 探测，
+    /// 改为直接尝试 WebSocket 连接，仅当握手返回 404 时判定为旧版 runtime 并回退 events.mux。</remarks>
+    private async Task<ClientWebSocket> ConnectStreamAsync(CancellationToken ct)
     {
-        var useRemoteMux = _remoteMuxAvailable ?? await ProbeRemoteMuxAsync(ct);
-        _remoteMuxAvailable = useRemoteMux;
-        if (!useRemoteMux)
+        if (_remoteMuxAvailable != false)
         {
-            await ws.ConnectAsync(StreamUri("api/events.mux"), ct);
-            return;
+            var ws = new ClientWebSocket();
+            try
+            {
+                await ConnectRemoteMuxAsync(ws, ct);
+                _remoteMuxAvailable = true;
+                return ws;
+            }
+            catch (WebSocketException ex) when (IsHandshakeNotFound(ex))
+            {
+                ws.Dispose();
+            }
+            catch
+            {
+                ws.Dispose();
+                throw;
+            }
         }
 
+        var legacy = new ClientWebSocket();
+        await legacy.ConnectAsync(StreamUri("api/events.mux"), ct);
+        _remoteMuxAvailable = false;
+        return legacy;
+    }
+
+    /// <summary>判断 WebSocket 握手失败是否为 HTTP 404。
+    /// WebSocketException 不暴露状态码；.NET 握手失败消息格式稳定为
+    /// "The server returned status code '404' when status code '101' was expected"，NativeErrorCode 部分场景携带状态码。</summary>
+    private static bool IsHandshakeNotFound(WebSocketException ex)
+        => ex.NativeErrorCode == 404
+           || ex.Message.Contains("'404'", StringComparison.Ordinal);
+
+    private async Task ConnectRemoteMuxAsync(ClientWebSocket ws, CancellationToken ct)
+    {
         if (_auth.Token is not null && !await _auth.EnsureAuthenticatedAsync(ct))
         {
             // 事件流 WebSocket 只认 cookie；旧 cookie 可能随 runtime 重启失效，重置后仍失败则抛出走退避重连。
@@ -195,7 +222,6 @@ public sealed class DshEventMonitor : IAsyncDisposable
         }
 
         await ws.ConnectAsync(StreamUri("api/remote.mux"), ct);
-        _remoteMuxAvailable = true;
 
         // 打开 $events 逻辑流；服务端先回 ready 项再推送事件。
         var open = JsonSerializer.Serialize(new
@@ -207,26 +233,6 @@ public sealed class DshEventMonitor : IAsyncDisposable
         });
         var bytes = Encoding.UTF8.GetBytes(open);
         await ws.SendAsync(bytes, WebSocketMessageType.Text, endOfMessage: true, ct);
-    }
-
-    /// <summary>探测 remote.mux 端点是否存在：HTTP 404 视为旧版 runtime（无该端点）。</summary>
-    private async Task<bool> ProbeRemoteMuxAsync(CancellationToken ct)
-    {
-        try
-        {
-            using var http = new HttpClient(_auth.CreateHandler())
-            {
-                Timeout = MuxExistsProbeTimeout,
-            };
-            using var response = await http.GetAsync(new Uri(_auth.Origin, "api/remote.mux"), ct);
-            // 新版对普通 GET 返回非 404（如升级要求错误）；旧版路由未认领返回 404。
-            return response.StatusCode != System.Net.HttpStatusCode.NotFound;
-        }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or OperationCanceledException)
-        {
-            // 服务未就绪：默认按新版协议尝试连接，失败由退避重连兜底。
-            return true;
-        }
     }
 
     private async Task PumpStreamAsync(ClientWebSocket ws, CancellationToken ct)

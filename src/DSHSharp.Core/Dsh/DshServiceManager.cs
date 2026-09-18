@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -1669,16 +1670,24 @@ public sealed class DshServiceManager : IDisposable
 
     private void CaptureReadyUrl(string line)
     {
+        if (!TryParseReadyUrl(line, out var uri)) return;
+        _activeBaseUri = uri;
+        _readyUrlSource?.TrySetResult(uri);
+        Log?.Invoke($"captured private runtime URL: {uri}");
+    }
+
+    /// <summary>从输出行提取运行时 URL。DSH 0.1.5-rc.2 起同一行可能追加 " (LAN: …)" 后缀，
+    /// 因此 URL 只取标记后的第一个空白分隔段，整行直接 Uri.TryCreate 会因空格失败。</summary>
+    internal static bool TryParseReadyUrl(string line, [NotNullWhen(true)] out Uri? uri)
+    {
+        uri = null;
         const string marker = "dsh web: ";
         var index = line.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
-        if (index < 0) return;
+        if (index < 0) return false;
         var value = line[(index + marker.Length)..].Trim();
-        if (Uri.TryCreate(value, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https")
-        {
-            _activeBaseUri = uri;
-            _readyUrlSource?.TrySetResult(uri);
-            Log?.Invoke($"captured private runtime URL: {uri}");
-        }
+        var end = value.IndexOf(' ');
+        if (end >= 0) value = value[..end];
+        return Uri.TryCreate(value, UriKind.Absolute, out uri!) && uri.Scheme is "http" or "https";
     }
 
     private void AppendLog(string line)

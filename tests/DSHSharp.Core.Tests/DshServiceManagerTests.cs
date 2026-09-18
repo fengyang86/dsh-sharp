@@ -387,6 +387,25 @@ public sealed class DshServiceManagerTests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData("dsh web: http://127.0.0.1:3080/?token=abc", "http://127.0.0.1:3080/?token=abc")]
+    [InlineData("dsh web: http://127.0.0.1:3080/?token=abc (LAN: http://192.168.1.5:3080/?token=def)", "http://127.0.0.1:3080/?token=abc")]
+    [InlineData("[12:00:00] dsh web: http://localhost:9/?token=x", "http://localhost:9/?token=x")]
+    public void TryParseReadyUrl_TakesFirstWhitespaceDelimitedSegment(string line, string expected)
+    {
+        var ok = DshServiceManager.TryParseReadyUrl(line, out var uri);
+
+        Assert.True(ok);
+        Assert.Equal(expected, uri!.ToString());
+    }
+
+    [Theory]
+    [InlineData("dsh web: opening the default browser; pass --no-open to disable")]
+    [InlineData("dsh: some other message")]
+    [InlineData("")]
+    public void TryParseReadyUrl_WithoutHttpUrl_ReturnsFalse(string line)
+        => Assert.False(DshServiceManager.TryParseReadyUrl(line, out _));
+
     private static string WriteProfileManifest(string json)
     {
         var path = Path.Combine(Path.GetTempPath(), $"dshsharp-profile-{Guid.NewGuid():N}.json");
