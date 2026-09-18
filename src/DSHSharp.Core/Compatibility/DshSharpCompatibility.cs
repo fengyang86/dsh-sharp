@@ -3,7 +3,7 @@ namespace DSHSharp.Core.Compatibility;
 /// <summary>DSH-Sharp 与 DSH 的版本契约。</summary>
 public static class DshSharpCompatibility
 {
-    public const string ProductVersion = "0.2.4";
+    public const string ProductVersion = "0.2.5";
     public const string MinimumDshVersion = "0.1.0-rc.8";
     public const string MaximumDshVersionExclusive = "0.1.6";
     public const string DefaultDshVersion = "0.1.6-alpha.2";
