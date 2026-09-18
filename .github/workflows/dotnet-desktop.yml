@@ -36,7 +36,7 @@ jobs:
         run: dotnet build DSHSharp.slnx --configuration ${{ matrix.configuration }} --no-restore --warnaserror
       - name: Publish Windows package
         if: matrix.configuration == 'Release'
-        run: dotnet publish src/DSHSharp/DSHSharp.csproj --configuration Release --runtime win-x64 --self-contained true --output artifacts/ci/windows-x64 --no-restore
+        run: dotnet publish src/DSHSharp/DSHSharp.csproj --configuration Release --framework net10.0-windows10.0.19041.0 --runtime win-x64 --self-contained true --output artifacts/ci/windows-x64 --no-restore
       - name: Upload Windows package
         if: matrix.configuration == 'Release'
         uses: actions/upload-artifact@v4

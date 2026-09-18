@@ -1,16 +1,18 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net10.0</TargetFramework>
+    <!-- 多目标：windows TFM 启用 WinRT 投影（原生 Toast）；纯 net10.0 供 linux-x64 构建。 -->
+    <TargetFrameworks>net10.0;net10.0-windows10.0.19041.0</TargetFrameworks>
     <RuntimeIdentifiers>win-x64;linux-x64</RuntimeIdentifiers>
+    <DefineConstants Condition="'$(TargetFramework)' == 'net10.0-windows10.0.19041.0'">$(DefineConstants);WINDOWS</DefineConstants>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\avalonia-logo.ico</ApplicationIcon>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
-    <Version>0.2.4</Version>
-    <AssemblyVersion>0.2.4.0</AssemblyVersion>
-    <FileVersion>0.2.4.0</FileVersion>
+    <Version>0.2.5</Version>
+    <AssemblyVersion>0.2.5.0</AssemblyVersion>
+    <FileVersion>0.2.5.0</FileVersion>
   </PropertyGroup>
 
   <ItemGroup>
@@ -29,6 +31,10 @@
     <PackageReference Include="Avalonia.Desktop" Version="12.1.1" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.1" />
     <PackageReference Include="Avalonia.Fonts.Inter" Version="12.1.1" />
+    <!-- 仅 windows TFM：原生 Toast（ContentBuilder + 非打包应用的 AUMID/COM 激活胶水）。
+         SDC 4.7.0 是其唯一传递依赖且带安全通告，直接引用修复版 4.7.2 覆盖。 -->
+    <PackageReference Include="CommunityToolkit.WinUI.Notifications" Version="7.1.2" Condition="'$(TargetFramework)' == 'net10.0-windows10.0.19041.0'" />
+    <PackageReference Include="System.Drawing.Common" Version="4.7.2" Condition="'$(TargetFramework)' == 'net10.0-windows10.0.19041.0'" />
     <PackageReference Include="AvaloniaUI.DiagnosticsSupport" Version="2.2.1">
       <IncludeAssets Condition="'$(Configuration)' != 'Debug'">None</IncludeAssets>
       <PrivateAssets Condition="'$(Configuration)' != 'Debug'">All</PrivateAssets>

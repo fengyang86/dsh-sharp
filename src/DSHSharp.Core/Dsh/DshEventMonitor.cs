@@ -24,6 +24,13 @@ public sealed class ServiceAvailabilityEventArgs(bool isOnline) : EventArgs
     public bool IsOnline { get; } = isOnline;
 }
 
+/// <summary>运行中会话数量变化事件参数（由 status/added/removed 事件驱动，非轮询）。</summary>
+public sealed class RunningSessionsChangedEventArgs(int count) : EventArgs
+{
+    /// <summary>当前处于 running 状态的会话数。</summary>
+    public int Count { get; } = count;
+}
+
 /// <summary>
 /// DSH 服务事件监控：
 /// <list type="bullet">
@@ -72,6 +79,25 @@ public sealed class DshEventMonitor : IAsyncDisposable
 
     /// <summary>DSH 服务在线状态变化（心跳探测）。</summary>
     public event EventHandler<ServiceAvailabilityEventArgs>? ServiceAvailabilityChanged;
+
+    /// <summary>运行中会话数量变化（事件在后台线程触发，调用方负责调度）。</summary>
+    public event EventHandler<RunningSessionsChangedEventArgs>? RunningSessionsChanged;
+
+    /// <summary>当前 running 会话快照（ID + 已知标题），供 UI 展示。</summary>
+    public IReadOnlyList<(string SessionId, string? Title)> RunningSnapshot()
+    {
+        var result = new List<(string, string?)>();
+        foreach (var (sessionId, running) in _runningSessions)
+        {
+            if (running)
+            {
+                _sessionTitles.TryGetValue(sessionId, out var title);
+                result.Add((sessionId, title));
+            }
+        }
+
+        return result;
+    }
 
     public void Start()
     {
@@ -314,9 +340,14 @@ public sealed class DshEventMonitor : IAsyncDisposable
         var removed = DshFrameParser.TryParseSessionRemoved(json);
         if (removed is not null)
         {
+            var wasRunning = _runningSessions.TryGetValue(removed, out var running) && running;
             _runningSessions.TryRemove(removed, out _);
             _sessionTitles.TryRemove(removed, out _);
             _sessionSeqs.TryRemove(removed, out _);
+            if (wasRunning)
+            {
+                RaiseRunningSessionsChanged();
+            }
         }
     }
 
@@ -327,18 +358,51 @@ public sealed class DshEventMonitor : IAsyncDisposable
     private void ApplyRunningState(string sessionId, bool running)
     {
         var completed = false;
-        var updated = _runningSessions.AddOrUpdate(
+        var changed = false;
+        _runningSessions.AddOrUpdate(
             sessionId,
-            _ => running,
+            _ =>
+            {
+                changed = true;
+                return running;
+            },
             (_, previous) =>
             {
                 completed = previous && !running;
+                changed = previous != running;
                 return running;
             });
 
         if (completed)
         {
             RaiseSessionCompleted(sessionId);
+        }
+
+        if (changed)
+        {
+            RaiseRunningSessionsChanged();
+        }
+    }
+
+    private void RaiseRunningSessionsChanged()
+    {
+        var count = 0;
+        foreach (var running in _runningSessions.Values)
+        {
+            if (running)
+            {
+                count++;
+            }
+        }
+
+        Log?.Invoke($"running sessions changed: count={count}");
+        try
+        {
+            RunningSessionsChanged?.Invoke(this, new RunningSessionsChangedEventArgs(count));
+        }
+        catch (Exception ex)
+        {
+            Log?.Invoke($"running sessions handler failed: {ex.Message}");
         }
     }
 

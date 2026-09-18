@@ -1,9 +1,11 @@
+using System.Diagnostics;
 using Avalonia;
 using Avalonia.Animation;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using DSHSharp.Core.Configuration;
+using DSHSharp.Core.Services;
 using DSHSharp.ViewModels;
 
 namespace DSHSharp.Views;
@@ -28,9 +30,60 @@ public partial class MainWindow : Window
         var viewModel = new MainWindowViewModel(settings);
         DataContext = viewModel;
 
+        // 外链分流：非 WebUI 自身的目标交给系统，内嵌视图只承载 DSH。
+        Web.NavigationStarted += OnWebViewNavigationStarted;
+        Web.NewWindowRequested += OnWebViewNewWindowRequested;
+
         WindowStateProperty.Changed.AddClassHandler<Window>(OnWindowStateChanged);
         Opened += (_, _) => RestoreWindowState();
         Closing += OnClosing;
+    }
+
+    /// <summary>当前 Runtime 的源（scheme+host+port）；未知时为 null，分流策略届时全部放行内嵌。</summary>
+    private static Uri? CurrentRuntimeOrigin()
+    {
+        var url = App.Instance?.RuntimeUrl;
+        return Uri.TryCreate(url, UriKind.Absolute, out var uri) ? uri : null;
+    }
+
+    private void OnWebViewNavigationStarted(object? sender, WebViewNavigationStartingEventArgs e)
+    {
+        if (!ExternalLinkPolicy.ShouldOpenExternally(e.Request, CurrentRuntimeOrigin()))
+        {
+            return;
+        }
+
+        e.Cancel = true;
+        OpenInSystemBrowser(e.Request!);
+    }
+
+    private void OnWebViewNewWindowRequested(object? sender, WebViewNewWindowRequestedEventArgs e)
+    {
+        e.Handled = true;
+        if (e.Request is { } request && !ExternalLinkPolicy.ShouldOpenExternally(request, CurrentRuntimeOrigin()))
+        {
+            // 指向 WebUI 自身的新窗口没有独立认证上下文，就地导航主视图。
+            Web.Source = request;
+            return;
+        }
+
+        if (e.Request is not null)
+        {
+            OpenInSystemBrowser(e.Request);
+        }
+    }
+
+    private static void OpenInSystemBrowser(Uri url)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(url.OriginalString) { UseShellExecute = true });
+            App.Log($"external link opened in system browser: {url.Scheme}://{url.Authority}");
+        }
+        catch (Exception ex)
+        {
+            App.Log($"open external link failed ({url}): {ex.Message}");
+        }
     }
 
     /// <summary>启动时恢复上次的窗口位置/大小/最大化状态。</summary>

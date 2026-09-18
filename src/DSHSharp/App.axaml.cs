@@ -37,6 +37,9 @@ public partial class App : Application
     private MainWindow? _mainWindow;
     private SettingsWindow? _settingsWindow;
     private TrayIcon? _trayIcon;
+
+    /// <summary>主窗口基础标题（与 MainWindow.axaml 的 Title 一致），运行计数作为后缀追加。</summary>
+    private const string BaseWindowTitle = "DSH-Sharp";
     private NativeMenu? _trayMenu;
     private NativeMenuItem? _trayServiceItem;
     private NativeMenuItem? _traySessionsItem;
@@ -682,6 +685,7 @@ public partial class App : Application
     {
         Log("tray:exit handler invoked");
         _isExiting = true;
+        Services.SessionNotifications.Uninitialize();
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             Log("tray:exit -> calling desktop.Shutdown()");
@@ -700,6 +704,10 @@ public partial class App : Application
         _monitor = new DshEventMonitor(auth);
         _monitor.SessionCompleted += OnSessionCompleted;
         _monitor.ServiceAvailabilityChanged += OnServiceAvailabilityChanged;
+        _monitor.RunningSessionsChanged += OnRunningSessionsChanged;
+        // 原生 Toast 点击激活回调来自 COM 线程，统一转 UI 线程导航。
+        Services.SessionNotifications.EnsureInitialized(
+            sessionId => Dispatcher.UIThread.Post(() => NavigateToSession(sessionId)));
         _monitor.Start();
     }
 
@@ -741,6 +749,14 @@ public partial class App : Application
 
             var finalTitle = title;
             var finalPreview = preview;
+
+            // 原生 Toast 优先：进操作中心、系统默认音、点击直达会话，无需强制唤起窗口。
+            if (Services.SessionNotifications.TryShowSessionCompleted(e.SessionId, finalTitle, finalPreview))
+            {
+                Log($"session completed: native toast shown '{finalTitle}'");
+                return;
+            }
+
             Dispatcher.UIThread.Post(() =>
             {
                 try
@@ -775,6 +791,35 @@ public partial class App : Application
         });
     }
 
+    /// <summary>运行中会话数量变化：标题栏计数 + 任务栏脉冲 + 托盘最近会话即时刷新。</summary>
+    private void OnRunningSessionsChanged(object? sender, RunningSessionsChangedEventArgs e)
+    {
+        Dispatcher.UIThread.Post(() => UpdateRunningIndicator(e.Count));
+    }
+
+    /// <summary>UI 线程：根据运行中会话数刷新窗口标题与任务栏状态指示。</summary>
+    private void UpdateRunningIndicator(int count)
+    {
+        try
+        {
+            if (_mainWindow is { } window)
+            {
+                window.Title = count > 0
+                    ? $"{BaseWindowTitle} — {count} 个会话运行中"
+                    : BaseWindowTitle;
+                var handle = window.TryGetPlatformHandle()?.Handle ?? 0;
+                Services.WindowsTaskbarProgress.SetRunningIndicator(handle, count > 0);
+            }
+
+            // 事件驱动的即时刷新：托盘菜单里的 "●" 运行标记与列表次序保持新鲜（复用节流调度）。
+            _ = RefreshSessionsAsync();
+        }
+        catch (Exception ex)
+        {
+            Log($"running indicator update failed: {ex.Message}");
+        }
+    }
+
     private void OnServiceAvailabilityChanged(object? sender, ServiceAvailabilityEventArgs e)
     {
         _serviceOnline = e.IsOnline;
@@ -784,10 +829,15 @@ public partial class App : Application
             try
             {
                 UpdateServiceUi();
+                if (!e.IsOnline)
+                {
+                    // 服务下线后运行状态已无意义：清空标题/任务栏指示。
+                    UpdateRunningIndicator(0);
+                }
             }
             catch (Exception ex)
             {
-                Log($"service status update failed: {ex}");
+                Log($"service status update failed: {ex.Message}");
             }
         });
     }
