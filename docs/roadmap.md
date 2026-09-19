@@ -30,14 +30,22 @@
 
 ## v0.3.0 之后（按需排期）
 
-- 跨会话全文搜索（经 `session/page` 翻历史；体量最大，候选头牌）
+- **插件市场集成（生态调研后的头牌候选）**：DSH 插件生态已爆发（社区聚合 Oh-My-DSH 1117+，精选 awesome-dsh-plugin 379+），`dsh plugin --profile web add "github:owner/repo#ref"` 是统一安装通道；awesome 仓库提供 `data/market.json`（≤500KB，有接口规范）面向下游市场——客户端可内嵌市场浏览 + 一键安装；注意 git 规格插件需 pnpm `allowBuilds` 放行 prepare 脚本（0.1.6 起）
+- 跨会话全文搜索（经 `session/page` 翻历史；体量最大）
 - 多窗口 / 第二会话窗口（WebView2 多实例）
-- LAN 手机访问开关（0.1.6 原生能力，默认关 + 风险提示）
+- 手机远程不再自研：直接集成社区 `dsh-pocket` 插件方案
 - 进程退出后的 Toast 冷激活（协议激活切换，依赖 v0.3.0 #5）
 - 热键自定义设置界面（v0.3.0 为固定手势）
 - 会话导出（`session.export` RPC → 本地 jsonl）
 - WebView 前进/后退/刷新按钮（标题栏）
 - npm 镜像源配置（npmmirror 注入 `npm_config_registry`）与官方包预下载预热
+
+## 生态调研速记（2026-09-19）
+
+- 编程/Agent 方向高价值插件：`dsh-agent-teams`（多 Agent 协作）、`dsh_workflow`、`dsh-auto-mode`、`mem9` / `dsh-mnemon`（跨会话记忆）、`dsh-auto-continue`（断点续跑）、`dsh-context`（上下文命令）、`dsh-at-file`（@文件选择）、`dsh-undo-savepoint`（安全模式/消息级撤销）、`dsh-turn-rewind`、`dsh-reasoning-effort`（推理等级）、`dsh-synapse`（会话地图）、`DSH-taskboard`、`BrowserSkill`（腾讯）、`dsh-pentest`
+- 用量与订阅：`dsh-usage-stats`、`dsh-cost-meter`、`TokenLedger`、`dsh-plugin-subscriptions`（复用 ChatGPT/Claude/Grok 订阅）
+- 市场与发现：官方 Plugin Hub、`dsh-desktop-safe-market`（market.json 规范）、`dsh-market`、`dsh-find-plugins`、awesome-dsh-plugin（bruc3van）、Oh-My-DSH（like-study1）
+- 精选入口：github.com/bruc3van/awesome-dsh-plugin（含 CATALOG/TOP200/SHOWCASE 与每日快照数据）
 
 ## 维护节奏
 
