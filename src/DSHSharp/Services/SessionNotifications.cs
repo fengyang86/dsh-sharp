@@ -17,14 +17,14 @@ internal static class SessionNotifications
     }
 
     /// <summary>尝试以原生 Toast 展示；成功 true（含系统默认音），不可用或失败 false。</summary>
-    internal static bool TryShowSessionCompleted(string sessionId, string title, string? preview)
+    internal static bool TryShowSessionCompleted(string sessionId, string toastTitle, string sessionName, string? preview)
     {
 #if WINDOWS
         if (OperatingSystem.IsWindows())
         {
             try
             {
-                NativeToast.ShowSessionCompleted(sessionId, title, preview);
+                NativeToast.ShowSessionCompleted(sessionId, toastTitle, sessionName, preview);
                 return true;
             }
             catch (Exception ex)

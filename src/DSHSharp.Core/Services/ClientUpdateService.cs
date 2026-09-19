@@ -160,7 +160,7 @@ public sealed class ClientUpdateService
             }
 
             Directory.CreateDirectory(_stagingRoot);
-            var zipPath = Path.Combine(_stagingRoot, $"DSHSharp-v{release.Value.Tag}-win-x64.zip");
+            var zipPath = Path.Combine(_stagingRoot, $"DSHSharp-{release.Value.Tag.TrimStart('v')}-win-x64.zip");
             var downloaded = await DownloadFileAsync(asset.DownloadUrl, zipPath, asset.SizeBytes, ct);
             if (downloaded is null)
             {

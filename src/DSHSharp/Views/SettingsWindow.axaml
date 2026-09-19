@@ -164,6 +164,20 @@
                         <Button Content="更新 Runtime" Padding="14,5" Command="{Binding UpdateServiceCommand}"
                                 IsEnabled="{Binding CanUpdateOfficialPackage}"/>
                     </StackPanel>
+                    <Separator Margin="0,4"/>
+                    <TextBlock Text="数据维护" FontSize="14" FontWeight="SemiBold"/>
+                    <TextBlock Text="备份包含私有会话与配置（不含凭据与派生缓存）；诊断包含日志尾部（token 已脱敏）与版本清单，可安全外发。"
+                               FontSize="12" TextWrapping="Wrap" LineHeight="18"
+                               Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button Content="备份会话数据" Padding="14,5" Command="{Binding BackupDataCommand}"/>
+                        <Button Content="导出诊断包" Padding="14,5" Command="{Binding ExportDiagnosticsCommand}"/>
+                        <Button Content="打开所在文件夹" Padding="14,5"
+                                IsVisible="{Binding MaintenanceResultAvailable}"
+                                Command="{Binding OpenMaintenanceZipCommand}"/>
+                    </StackPanel>
+                    <TextBlock Text="{Binding MaintenanceMessage}" FontSize="12" TextWrapping="Wrap" LineHeight="18"
+                               Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
                 </StackPanel>
 
             </StackPanel>

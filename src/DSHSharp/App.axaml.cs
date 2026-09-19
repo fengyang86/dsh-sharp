@@ -21,6 +21,9 @@ public partial class App : Application
     private static readonly string LogPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DSHSharp", "app.log");
 
+    /// <summary>应用数据目录（%APPDATA%\DSHSharp）。</summary>
+    public static string AppDataDirectory => Path.GetDirectoryName(LogPath)!;
+
     /// <summary>当前 App 实例（供入口/托盘/单实例回调访问）。</summary>
     public static App? Instance { get; private set; }
 
@@ -698,8 +701,39 @@ public partial class App : Application
         }
     }
 
-    private void SetupDshMonitor(DshAuthSession auth)
+    /// <summary>一键备份会话数据（dsh-home 的会话/配置，排除凭据与派生物）到文档目录，返回 zip 路径。</summary>
+    public string BackupUserData()
     {
+        var zipPath = UserDataMaintenance.CreateBackupZip(AppDataDirectory);
+        Log($"user data backup created: {zipPath}");
+        return zipPath;
+    }
+
+    /// <summary>一键导出诊断包（日志尾部 token 脱敏 + 版本/运行时/更新状态清单）到文档目录，返回 zip 路径。</summary>
+    public string ExportDiagnostics()
+    {
+        var update = _clientUpdate?.State;
+        var profileManifest = Path.Combine(AppDataDirectory, "dsh-home", "profiles", "web", "package.json");
+        var extras = new Dictionary<string, string>
+        {
+            ["versions.txt"] = string.Join(Environment.NewLine, new[]
+            {
+                $"client: DSH-Sharp {DshSharpCompatibility.ProductVersion}",
+                $"runtime: {_serviceManager?.InstalledPackageVersion ?? "未安装"}",
+                $"os: {Environment.OSVersion.VersionString} ({Environment.OSVersion.Platform})",
+                $"install: {Environment.ProcessPath}",
+                $"update-state: {update?.Phase ?? "未启用"} {update?.LatestVersion ?? ""}".TrimEnd(),
+            }),
+            ["profile-web-package.json"] = File.Exists(profileManifest)
+                ? File.ReadAllText(profileManifest)
+                : "（不存在）",
+        };
+        var zipPath = UserDataMaintenance.CreateDiagnosticsZip(AppDataDirectory, extras);
+        Log($"diagnostics exported: {zipPath}");
+        return zipPath;
+    }
+
+    private void SetupDshMonitor(DshAuthSession auth)    {
         DshEventMonitor.Log = Log;
         _monitor = new DshEventMonitor(auth);
         _monitor.SessionCompleted += OnSessionCompleted;
@@ -719,11 +753,13 @@ public partial class App : Application
             return;
         }
 
-        // 后台线程异步获取会话标题与最后回复开头，再回 UI 线程弹 Toast。
+        // 后台线程异步获取回合结局（完成/失败/中止）与最后回复开头，再决定是否弹 Toast。
         _ = Task.Run(async () =>
         {
             string title;
             string? preview = null;
+            string outcomeKind = "completed";
+            string? errorMessage = null;
             try
             {
                 var client = _apiClient ?? new DshApiClient(_authSession ?? new DshAuthSession(RuntimeBaseUrl));
@@ -738,7 +774,10 @@ public partial class App : Application
 
                 if (throughSeq > 0)
                 {
-                    preview = await client.GetLastAssistantTextAsync(e.SessionId, throughSeq);
+                    var outcome = await client.GetTurnOutcomeAsync(e.SessionId, throughSeq);
+                    outcomeKind = outcome.Kind ?? "completed";
+                    errorMessage = outcome.ErrorMessage;
+                    preview = outcome.LastAssistantText;
                 }
             }
             catch (Exception ex)
@@ -747,16 +786,31 @@ public partial class App : Application
                 title = string.IsNullOrEmpty(e.Title) ? ShortId(e.SessionId) : e.Title;
             }
 
+            // aborted 是用户主动停止（含 Esc）：不再打扰。
+            if (outcomeKind == "aborted")
+            {
+                Log($"session turn ended as aborted, skip toast: session={e.SessionId}");
+                return;
+            }
+
+            var failed = outcomeKind == "error";
+            var heading = failed ? "会话回合失败" : "会话已完成";
+            if (failed && string.IsNullOrEmpty(preview))
+            {
+                preview = errorMessage ?? "（无错误详情）";
+            }
+
             var finalTitle = title;
             var finalPreview = preview;
 
             // 原生 Toast 优先：进操作中心、系统默认音、点击直达会话，无需强制唤起窗口。
-            if (Services.SessionNotifications.TryShowSessionCompleted(e.SessionId, finalTitle, finalPreview))
+            if (Services.SessionNotifications.TryShowSessionCompleted(e.SessionId, heading, finalTitle, finalPreview))
             {
-                Log($"session completed: native toast shown '{finalTitle}'");
+                Log($"session turn outcome: kind={outcomeKind}, native toast shown '{finalTitle}'");
                 return;
             }
 
+            var finalHeading = heading;
             Dispatcher.UIThread.Post(() =>
             {
                 try
@@ -767,7 +821,7 @@ public partial class App : Application
                         return;
                     }
 
-                    Log($"session completed: showing toast '{finalTitle}', preview='{finalPreview}'");
+                    Log($"session turn outcome: kind={outcomeKind}, showing toast '{finalTitle}', preview='{finalPreview}'");
 
                     // 通知音效（可配置开关）。
                     if (Settings.NotificationSoundEnabled)
@@ -775,7 +829,7 @@ public partial class App : Application
                         Services.NotificationSound.Play();
                     }
 
-                    _mainWindow.ShowNotification("会话已完成", finalTitle, finalPreview);
+                    _mainWindow.ShowNotification(finalHeading, finalTitle, finalPreview);
 
                     // 窗口驻留托盘时自动唤起，确保用户看到通知。
                     if (!_mainWindow.IsVisible)

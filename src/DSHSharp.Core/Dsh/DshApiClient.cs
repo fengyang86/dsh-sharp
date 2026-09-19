@@ -57,6 +57,26 @@ public sealed class DshApiClient
     }
 
     /// <summary>
+    /// 获取刚结束回合的结局（用于区分完成/失败通知）：最后一条 <c>turn/end</c> 的 reason.kind
+    /// 与错误信息，附带最后一条助手回复文本。旧版协议无 turn/end 记录时 Kind 为 null（按完成处理）。
+    /// </summary>
+    public async Task<TurnOutcome> GetTurnOutcomeAsync(string sessionId, long throughSeq, CancellationToken ct = default)
+    {
+        var json = await PostRpcCompatAsync(
+            (DshMethods.SessionPageNew, DshPayloads.SessionPageNew(sessionId, throughSeq)),
+            (DshMethods.SessionHistoryOld, DshPayloads.SessionHistoryOld(sessionId)),
+            ct);
+        var outcome = DshRpcParser.ParseTurnOutcome(json);
+        if (outcome is { Kind: null } or null)
+        {
+            var legacyText = outcome?.LastAssistantText ?? DshRpcParser.ParseLastAssistantText(json);
+            return new TurnOutcome(null, null, legacyText);
+        }
+
+        return outcome;
+    }
+
+    /// <summary>
     /// 查询 npm 上 @deepseek-ai/dsh 的最新稳定版本。受限网络环境依次尝试
     /// 官方 registry 与 npmmirror 镜像（各经 HttpFallback 回退链）。
     /// </summary>
@@ -189,6 +209,10 @@ public sealed class DshApiClient
 }
 
 /// <summary>RPC 响应解析（纯函数，便于单元测试）。</summary>
+/// <summary>刚结束回合的结局：reason.kind（completed/error/aborted/blocked/…，null 表示未知按完成处理）、
+/// 错误信息（仅 error 带）、最后一条助手回复文本。</summary>
+public sealed record TurnOutcome(string? Kind, string? ErrorMessage, string? LastAssistantText);
+
 public static class DshRpcParser
 {
     /// <summary>响应信封是否为 <c>result.ok == true</c>；解析失败返回 false。</summary>
@@ -398,9 +422,79 @@ public static class DshRpcParser
         return null;
     }
 
-    private static string? ExtractText(JsonElement content)
+    /// <summary>
+    /// 从 <c>session/page</c> 响应提取最后一条 <c>turn/end</c> 的结局
+    /// （<c>event.data.reason.kind</c>，error 时附 <c>reason.error.message</c>），
+    /// 同时提取最后一条助手回复文本。无 turn/end 记录或解析失败返回 null。
+    /// </summary>
+    public static TurnOutcome? ParseTurnOutcome(string json)
     {
-        var parts = new List<string>();
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            if (root.TryGetProperty("result", out var resultEl) is false ||
+                resultEl.TryGetProperty("ok", out var okEl) is false ||
+                okEl.GetBoolean() is false ||
+                resultEl.TryGetProperty("value", out var valueEl) is false ||
+                valueEl.TryGetProperty("records", out var records) is false)
+            {
+                return null;
+            }
+
+            string? kind = null;
+            string? errorMessage = null;
+            string? assistantText = null;
+            foreach (var record in records.EnumerateArray().Reverse())
+            {
+                if (record.TryGetProperty("type", out var recordType) is false ||
+                    recordType.GetString() != "event" ||
+                    record.TryGetProperty("event", out var evt) is false ||
+                    evt.TryGetProperty("type", out var typeEl) is false)
+                {
+                    continue;
+                }
+
+                var eventType = typeEl.GetString();
+                if (kind is null && eventType == "turn/end" &&
+                    evt.TryGetProperty("data", out var data) &&
+                    data.TryGetProperty("reason", out var reason) &&
+                    reason.TryGetProperty("kind", out var kindEl))
+                {
+                    kind = kindEl.GetString();
+                    if (kind == "error" &&
+                        reason.TryGetProperty("error", out var failure) &&
+                        failure.TryGetProperty("message", out var messageEl) &&
+                        messageEl.ValueKind == JsonValueKind.String)
+                    {
+                        errorMessage = messageEl.GetString();
+                    }
+                }
+
+                if (assistantText is null && eventType == "assistant/message" &&
+                    evt.TryGetProperty("data", out var messageData) &&
+                    messageData.TryGetProperty("message", out var message) &&
+                    message.TryGetProperty("content", out var content))
+                {
+                    assistantText = ExtractText(content);
+                }
+
+                if (kind is not null && assistantText is not null)
+                {
+                    break;
+                }
+            }
+
+            return new TurnOutcome(kind, errorMessage, assistantText);
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
+        {
+            return null;
+        }
+    }
+
+    private static string? ExtractText(JsonElement content)
+    {        var parts = new List<string>();
         foreach (var block in content.EnumerateArray())
         {
             if (block.TryGetProperty("type", out var blockType) &&

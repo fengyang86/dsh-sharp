@@ -37,13 +37,13 @@ internal static class NativeToast
         };
     }
 
-    /// <summary>展示"会话已完成"通知（系统默认提示音）。</summary>
-    internal static void ShowSessionCompleted(string sessionId, string title, string? preview)
+    /// <summary>展示会话回合结局通知（系统默认提示音）：toastTitle 为"会话已完成/会话回合失败"。</summary>
+    internal static void ShowSessionCompleted(string sessionId, string toastTitle, string sessionName, string? preview)
     {
         var builder = new ToastContentBuilder()
             .AddArgument("session", sessionId)
-            .AddText("会话已完成")
-            .AddText(title);
+            .AddText(toastTitle)
+            .AddText(sessionName);
         if (!string.IsNullOrEmpty(preview))
         {
             builder.AddText(preview);

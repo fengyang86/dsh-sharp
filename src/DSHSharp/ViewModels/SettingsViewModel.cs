@@ -390,6 +390,100 @@ public partial class SettingsViewModel : ViewModelBase
     [RelayCommand]
     private void UpdateService() => _updateService();
 
+    // ---- 数据维护（备份 / 诊断包） ----
+
+    [ObservableProperty]
+    private bool _maintenanceBusy;
+
+    [ObservableProperty]
+    private string? _maintenanceMessage;
+
+    [ObservableProperty]
+    private string? _lastMaintenanceZipPath;
+
+    public bool MaintenanceResultAvailable => LastMaintenanceZipPath is not null;
+
+    [RelayCommand(CanExecute = nameof(CanRunMaintenance))]
+    private async Task BackupData()
+    {
+        if (App.Instance is null)
+        {
+            return;
+        }
+
+        MaintenanceBusy = true;
+        MaintenanceMessage = null;
+        try
+        {
+            var path = await Task.Run(() => App.Instance.BackupUserData());
+            LastMaintenanceZipPath = path;
+            MaintenanceMessage = $"备份完成（{path}）";
+        }
+        catch (Exception ex)
+        {
+            MaintenanceMessage = $"备份失败：{ex.Message}";
+        }
+        finally
+        {
+            MaintenanceBusy = false;
+        }
+    }
+
+    [RelayCommand(CanExecute = nameof(CanRunMaintenance))]
+    private async Task ExportDiagnostics()
+    {
+        if (App.Instance is null)
+        {
+            return;
+        }
+
+        MaintenanceBusy = true;
+        MaintenanceMessage = null;
+        try
+        {
+            var path = await Task.Run(() => App.Instance.ExportDiagnostics());
+            LastMaintenanceZipPath = path;
+            MaintenanceMessage = $"诊断包已导出（{path}）";
+        }
+        catch (Exception ex)
+        {
+            MaintenanceMessage = $"导出失败：{ex.Message}";
+        }
+        finally
+        {
+            MaintenanceBusy = false;
+        }
+    }
+
+    [RelayCommand]
+    private void OpenMaintenanceZip()
+    {
+        if (LastMaintenanceZipPath is not { } zip || !File.Exists(zip))
+        {
+            return;
+        }
+
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe", $"/select,\"{zip}\"")
+            {
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception ex)
+        {
+            MaintenanceMessage = $"打开文件夹失败：{ex.Message}";
+        }
+    }
+
+    private bool CanRunMaintenance() => !MaintenanceBusy;
+
+    partial void OnMaintenanceBusyChanged(bool value)
+    {
+        BackupDataCommand.NotifyCanExecuteChanged();
+        ExportDiagnosticsCommand.NotifyCanExecuteChanged();
+    }
+
     // ---- 客户端自更新 ----
 
     [ObservableProperty]
