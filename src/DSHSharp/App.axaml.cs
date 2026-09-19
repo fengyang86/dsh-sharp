@@ -27,6 +27,9 @@ public partial class App : Application
     /// <summary>当前 App 实例（供入口/托盘/单实例回调访问）。</summary>
     public static App? Instance { get; private set; }
 
+    /// <summary>启动参数携带的深链目标会话（dshsharp://session/&lt;id&gt;；服务就绪后导航一次）。</summary>
+    public static string? PendingDeepLinkSession { get; set; }
+
     /// <summary>本次启动是否来自自启动（--autostart）。</summary>
     public static bool AutoStartLaunch { get; set; }
 
@@ -40,6 +43,7 @@ public partial class App : Application
     private MainWindow? _mainWindow;
     private SettingsWindow? _settingsWindow;
     private TrayIcon? _trayIcon;
+    private Services.GlobalHotkeyService? _hotkeys;
 
     /// <summary>主窗口基础标题（与 MainWindow.axaml 的 Title 一致），运行计数作为后缀追加。</summary>
     private const string BaseWindowTitle = "DSH-Sharp";
@@ -95,6 +99,7 @@ public partial class App : Application
 
             SetupTrayIcon();
             SetupServiceManager();
+            SetupGlobalHotkeys();
 
             if (AutoStartLaunch || Settings.StartMinimized)
             {
@@ -191,6 +196,8 @@ public partial class App : Application
         _serviceManager?.Dispose();
         _sessionRefreshTimer?.Dispose();
         SaveWindowState();
+        _hotkeys?.Dispose();
+        _hotkeys = null;
         _trayIcon?.Dispose();
         _trayIcon = null;
         Log("app OnExit finished");
@@ -404,6 +411,29 @@ public partial class App : Application
             "更改已即时生效。");
     }
 
+    /// <summary>OS 级全局热键：Ctrl+Alt+D 唤起主窗口；Ctrl+Alt+K 唤起并呼出会话切换器。</summary>
+    private void SetupGlobalHotkeys()
+    {
+        _hotkeys = new Services.GlobalHotkeyService(id =>
+            SafePost($"hotkey:{id}", () => HandleGlobalHotkey(id)));
+        if (!_hotkeys.TryInstall(out var error) && error is not null)
+        {
+            Log($"global hotkeys unavailable: {error}");
+        }
+    }
+
+    private void HandleGlobalHotkey(int id)
+    {
+        if (id == Services.GlobalHotkeyService.HotkeyOpenSwitcher)
+        {
+            ActivateMainWindow();
+            _mainWindow?.NavigateToPluginHash("dshsharp-switcher=1");
+            return;
+        }
+
+        ActivateMainWindow();
+    }
+
     private void SetupTrayIcon()
     {
         using var iconStream = AssetLoader.Open(new Uri("avares://DSHSharp/Assets/avalonia-logo.ico"));
@@ -416,6 +446,13 @@ public partial class App : Application
         var settingsItem = new NativeMenuItem("设置…");
         settingsItem.Click += (_, _) => SafePost("tray:settings", OpenSettingsWindow);
         menu.Items.Add(settingsItem);
+        var newSessionItem = new NativeMenuItem("新建会话");
+        newSessionItem.Click += (_, _) => SafePost("tray:new-session", () =>
+        {
+            ActivateMainWindow();
+            _mainWindow?.NavigateHome();
+        });
+        menu.Items.Add(newSessionItem);
         menu.Items.Add(new NativeMenuItemSeparator());
         _traySessionsItem = new NativeMenuItem("最近会话（私有 Runtime）")
         {
@@ -956,6 +993,14 @@ public partial class App : Application
         else
         {
             _mainWindow.ShowOnboarding(false, null, false);
+            // 深链（dshsharp://session/<id>）冷启动：服务就绪后导航一次；
+            // 插件侧的 store 就绪重试保证早于列表 baseline 的导航也能生效。
+            if (PendingDeepLinkSession is { } session)
+            {
+                PendingDeepLinkSession = null;
+                Log($"deep link session navigation: {session}");
+                NavigateToSession(session);
+            }
         }
 
         RefreshTrayMenu();

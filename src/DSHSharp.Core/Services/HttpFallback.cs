@@ -94,8 +94,9 @@ public static class HttpFallback
         return new HttpClient(handler) { Timeout = timeout };
     }
 
-    /// <summary>按回退链 GET；返回响应（含已缓存的可用链路）。全部失败抛最后一次异常。</summary>
-    public static async Task<HttpResponseMessage> GetAsync(string url, TimeSpan timeout, string? userAgent = null, CancellationToken ct = default)
+    /// <summary>按回退链 GET；返回响应（含已缓存的可用链路）。rangeFrom &gt; 0 时携带 HTTP Range（断点续传）。
+    /// 全部失败抛最后一次异常。</summary>
+    public static async Task<HttpResponseMessage> GetAsync(string url, TimeSpan timeout, string? userAgent = null, long? rangeFrom = null, CancellationToken ct = default)
     {
         var candidates = BuildProxyCandidates();
         var start = _cachedIndex >= 0 && _cachedIndex < candidates.Count ? _cachedIndex : 0;
@@ -114,6 +115,11 @@ public static class HttpFallback
                     if (userAgent is not null)
                     {
                         request.Headers.UserAgent.ParseAdd(userAgent);
+                    }
+
+                    if (rangeFrom is > 0)
+                    {
+                        request.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(rangeFrom.Value, null);
                     }
 
                     response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);

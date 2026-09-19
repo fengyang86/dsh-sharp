@@ -1,38 +1,45 @@
 # DSH-Sharp 路线图
 
-> 已实现功能见 README。本文件记录已确认但尚未实施的需求与规划，按阶段排序。
+> 固化于 2026-09-19（v0.3.0 开发期）。已实现功能见 README；本文件记录 v0.3.0 的确认范围与其后的规划，按阶段排序。
 
-## 阶段 2：客户端命令、设置与增强插件（进行中）
+## 已发布（截至 v0.2.7）
 
-- 设置页重组为：连接 / 插件 / 偏好设置 / 关于与更新
-- 客户端定位为 DSH 插件宿主：窗口、生命周期、连接和插件管理留在客户端，业务能力下沉到插件
-- 插件按功能域拆分，客户端按内置插件套件统一安装、升级、启停和诊断
-- 会话域插件 `dsh-sharp-session`：Esc 停止当前运行会话；右键复制会话 ID 已实现；会话完成通知、通知中心和点击跳转随后归入同一插件
-- 工作区条目右键打开资源管理器：会话插件复用 DSH 官方 `workspaces.openPath(path)` 与 `shell.overlay`/`Menu`；待官方提供行级菜单贡献插槽后移除语义 DOM 定位
-- 插件快捷键后续支持修改、冲突检查与恢复默认；系统全局热键另行评估
-- DSH 增强插件按服务配置隔离，支持受信清单、安装/卸载/启停、兼容性、日志和重启
-- 不开放任意 .NET DLL 客户端插件；客户端扩展先限制为命令、托盘动作和受限事件订阅
+- v0.2.5：恢复维护；DSH 0.1.6-alpha.2 / 0.1.5-rc.2 兼容；事件流探测修复
+- v0.2.6：Windows 安装程序（Inno Setup 中文向导，每用户免 UAC）；原生 Toast 点击直达会话；运行状态可视化（标题计数 / 任务栏脉冲 / 托盘实时标记）；外链分流；断链插件自愈；任务栏 CLSID 修复
+- v0.2.7：插件链接步骤瞬时失败自动重试（杀软扫描窗口自愈）
 
-当前切片已通过内置 `dsh-sharp-session` 插件接入 Esc 停止当前运行会话并完成设置导航重组；通知中心、点击跳转、可编辑按键和完整插件管理仍待实现。
+## main 已合入、待随 v0.3.0 发布
 
-## 阶段 3：私有 Runtime 的安全更新与数据迁移
+- 一键备份会话数据 + 导出诊断包（token 脱敏，设置页"数据维护"）
+- 失败回合通知区分（`turn/end` reason：error 弹"回合失败"、aborted 静默）
+- Ctrl+K 会话切换器（插件侧，纯 DOM）；托盘"打开所在目录"（session/list 的 cwd）；托盘 tooltip 状态（版本/运行数/端口）；web→壳主题桥（`data-ds-theme-source` 官方镜像信号 + `chrome.webview.postMessage`）
 
-- Runtime 更新使用暂存目录、事务状态、启动恢复、健康检查和失败回滚，不替换私有 `dsh-home`（已实施）
-- 首次迁移仅复制旧 `~/.dsh` 的可迁移数据；会话、插件与凭据分别确认，旧目录不删除
-- 插件兼容性状态与 Runtime 更新结果联动展示
+## v0.3.0：从能用到顺手的常驻利器（进行中）
 
-## 已实现（0.2.3）
+| # | 项 | 说明 | 状态 |
+| --- | --- | --- | --- |
+| 1 | OS 级全局热键 | `Ctrl+Alt+D` 唤起主窗口；`Ctrl+Alt+K` 唤起并呼出会话切换器（经 hash 通道触发插件）；托盘补"新建会话"入口 | 待实施 |
+| 2 | 自更新通道加固 | 下载断点续传（HTTP Range，SHA256 校验保持）；GitHub 资产镜像回退（纯直连新机器兜底） | 待实施 |
+| 3 | WebView 下载体验 | 视 Avalonia.Controls.WebView 暴露的下载事件而定；至少验证默认下载条行为并留档 | 调查中 |
+| 4 | 通知分组 | 完成类 Toast 归入同一 Header，操作中心不再逐条堆叠 | 待实施 |
+| 5 | `dshsharp://` 深链 | 安装器注册协议；`dshsharp://session/<id>` 从终端/脚本唤起直达；为进程退出后的通知冷激活铺路 | 待实施 |
+| 6 | 切换器浅色适配 | Ctrl+K 面板配色跟随 web 主题（`body[data-ds-dark-theme]`） | 待实施 |
+| 7 | README 功能全景刷新 | 安装程序 / 原生通知 / 切换器 / 备份等新能力补进门面 | 待实施 |
+| 8 | 版本号单源 | csproj 版本从 `DshSharpCompatibility.ProductVersion` 派生，消除双处手工同步 | 待实施 |
+| 9 | ARCHIVE-NOTES 补记 | `turn/end` reason 分类、`data-ds-theme-source` 桥、切换器 hash 通道、深链协议 | 待实施 |
 
-- 客户端自更新：GitHub Releases 检查 + 后台预下载（百分比进度）+ 一键升级重启（新 EXE 自安装）
-- 支持 DSH 0.1.5-rc.1 与 0.1.5-alpha.2（Session V3 由 host 自动迁移；bin.js 的 import.meta.main 依赖由客户端 CLI wrapper 适配）
-- 会话插件工作区打开改用官方 Connection RPC （DSH 无客户端 workspaces.openPath 服务）
+## v0.3.0 之后（按需排期）
 
-## 待评估（未确认）
-
+- 跨会话全文搜索（经 `session/page` 翻历史；体量最大，候选头牌）
+- 多窗口 / 第二会话窗口（WebView2 多实例）
+- LAN 手机访问开关（0.1.6 原生能力，默认关 + 风险提示）
+- 进程退出后的 Toast 冷激活（协议激活切换，依赖 v0.3.0 #5）
+- 热键自定义设置界面（v0.3.0 为固定手势）
 - 会话导出（`session.export` RPC → 本地 jsonl）
-- Windows 系统通知（通知中心/锁屏，接 WinRT AppNotifications）
-- 全局热键（任意程序呼出/隐藏）
-- `dsh://` URL 协议唤起
 - WebView 前进/后退/刷新按钮（标题栏）
-- **npm 镜像源配置**：官方包下载较慢的环境可配置 npmmirror 镜像（注入 npm_config_registry）
-- **官方包预下载预热**：服务在线空闲时后台安装私有包，切到 Npx 模式时快速启动
+- npm 镜像源配置（npmmirror 注入 `npm_config_registry`）与官方包预下载预热
+
+## 维护节奏
+
+- DSH 版本跟进：`external/dsh` 参考克隆同步 → 按 ARCHIVE-NOTES 锚点核验 → 白名单更新
+- 发版流程：ProductVersion 提升（单源）→ CI 绿 → 双平台 zip + Setup.exe 三资产 Release

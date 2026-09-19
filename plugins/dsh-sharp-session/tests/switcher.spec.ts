@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { filterSessions, installSessionSwitcher, type SwitcherSessions } from '../src/client/switcher.ts'
+import { createSessionSwitcher, filterSessions, installSessionSwitcher, paletteFor, type SwitcherSessions } from '../src/client/switcher.ts'
 
 function sessionsFixture(entries: Record<string, { running?: boolean; title?: string; updatedAt?: number }> = {}) {
   const open = vi.fn()
@@ -126,6 +126,37 @@ describe('Ctrl+K 切换器', () => {
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', bubbles: true, cancelable: true }))
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true, cancelable: true }))
     expect(document.querySelector('input')).toBeNull()
+    dispose()
+  })
+
+  it('程序化 open() 与 dispose 后不再响应', () => {
+    const { sessions } = sessionsFixture({ s1: { title: '会话一' } })
+    const switcher = createSessionSwitcher(sessions)
+
+    switcher.open()
+    expect(document.querySelector('input')).not.toBeNull()
+    switcher.dispose()
+    expect(document.querySelector('input')).toBeNull()
+
+    pressCtrlK()
+    expect(document.querySelector('input')).toBeNull()
+  })
+
+  it('配色跟随 body[data-ds-dark-theme]', () => {
+    expect(paletteFor(document).panelBackground).toBe('rgb(252, 252, 250)')
+    document.body.setAttribute('data-ds-dark-theme', '')
+    expect(paletteFor(document).panelBackground).toBe('rgb(24, 27, 36)')
+    document.body.removeAttribute('data-ds-dark-theme')
+  })
+
+  it('暗色主题下面板使用深色配色', () => {
+    document.body.setAttribute('data-ds-dark-theme', '')
+    const { sessions } = sessionsFixture({ s1: { title: '会话一' } })
+    const dispose = installSessionSwitcher(sessions)
+    pressCtrlK()
+    const panel = document.querySelector('input')?.parentElement as HTMLElement
+    expect(panel.style.background).toBe('rgb(24, 27, 36)')
+    document.body.removeAttribute('data-ds-dark-theme')
     dispose()
   })
 })

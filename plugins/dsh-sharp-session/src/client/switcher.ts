@@ -46,10 +46,50 @@ function displayName(id: string, entry: SwitcherSessionEntry): string {
   return title !== undefined && title !== '' ? title : id.slice(0, 8)
 }
 
-export function installSessionSwitcher(
+export interface SessionSwitcher {
+  /** 程序化打开切换器（全局热键 / hash 通道使用）。 */
+  open(): void
+  /** 卸载监听并关闭已打开的面板。 */
+  dispose(): void
+}
+
+/** 创建并安装 Ctrl+K 会话切换器（兼作 programmatic open 的宿主）。 */
+export interface SwitcherPalette {
+  readonly backdrop: string
+  readonly panelBackground: string
+  readonly panelForeground: string
+  readonly panelShadow: string
+  readonly divider: string
+  readonly activeRow: string
+}
+
+const DARK_PALETTE: SwitcherPalette = {
+  backdrop: 'rgba(15, 18, 25, 0.45)',
+  panelBackground: 'rgb(24, 27, 36)',
+  panelForeground: 'rgb(232, 236, 245)',
+  panelShadow: '0 18px 48px rgba(0, 0, 0, 0.45)',
+  divider: 'rgba(255, 255, 255, 0.12)',
+  activeRow: 'rgba(90, 130, 255, 0.25)',
+}
+
+const LIGHT_PALETTE: SwitcherPalette = {
+  backdrop: 'rgba(120, 130, 150, 0.35)',
+  panelBackground: 'rgb(252, 252, 250)',
+  panelForeground: 'rgb(28, 32, 43)',
+  panelShadow: '0 18px 48px rgba(30, 40, 60, 0.25)',
+  divider: 'rgba(0, 0, 0, 0.12)',
+  activeRow: 'rgba(70, 110, 235, 0.18)',
+}
+
+/** 跟随 WebUI 主题选择配色：body[data-ds-dark-theme] 是官方暗色面板标记。 */
+export function paletteFor(documentRoot: Document): SwitcherPalette {
+  return documentRoot.body.hasAttribute('data-ds-dark-theme') ? DARK_PALETTE : LIGHT_PALETTE
+}
+
+export function createSessionSwitcher(
   sessions: SwitcherSessions,
   documentRoot: Document = document,
-): () => void {
+): SessionSwitcher {
   let root: HTMLElement | undefined
   let input: HTMLInputElement | undefined
   let listEl: HTMLElement | undefined
@@ -68,10 +108,12 @@ export function installSessionSwitcher(
       return
     }
 
+    const palette = paletteFor(documentRoot)
+    currentPalette = palette
     root = documentRoot.createElement('div')
     Object.assign(root.style, {
       position: 'fixed', inset: '0', zIndex: '9999',
-      background: 'rgba(15, 18, 25, 0.45)',
+      background: palette.backdrop,
       display: 'flex', justifyContent: 'center', alignItems: 'flex-start',
       paddingTop: '14vh', fontFamily: 'system-ui, sans-serif',
     } satisfies Partial<CSSStyleDeclaration>)
@@ -82,8 +124,8 @@ export function installSessionSwitcher(
     const panel = documentRoot.createElement('div')
     Object.assign(panel.style, {
       width: 'min(560px, 92vw)', borderRadius: '12px', overflow: 'hidden',
-      background: 'rgb(24, 27, 36)', color: 'rgb(232, 236, 245)',
-      boxShadow: '0 18px 48px rgba(0, 0, 0, 0.45)',
+      background: palette.panelBackground, color: palette.panelForeground,
+      boxShadow: palette.panelShadow,
     } satisfies Partial<CSSStyleDeclaration>)
 
     input = documentRoot.createElement('input')
@@ -93,7 +135,7 @@ export function installSessionSwitcher(
       width: '100%', boxSizing: 'border-box', padding: '14px 16px',
       border: 'none', outline: 'none', fontSize: '15px',
       background: 'transparent', color: 'inherit',
-      borderBottom: '1px solid rgba(255, 255, 255, 0.12)',
+      borderBottom: `1px solid ${palette.divider}`,
     } satisfies Partial<CSSStyleDeclaration>)
     input.addEventListener('input', () => render(input!.value))
     input.addEventListener('keydown', (event) => {
@@ -130,11 +172,13 @@ export function installSessionSwitcher(
     input.focus()
   }
 
+  let currentPalette: SwitcherPalette = DARK_PALETTE
+
   const updateSelection = (): void => {
     listEl?.querySelectorAll('[data-switcher-item]').forEach((node, index) => {
       const el = node as HTMLElement
       const active = index === selected
-      el.style.background = active ? 'rgba(90, 130, 255, 0.25)' : 'transparent'
+      el.style.background = active ? currentPalette.activeRow : 'transparent'
       if (active) el.scrollIntoView?.({ block: 'nearest' })
     })
   }
@@ -194,8 +238,19 @@ export function installSessionSwitcher(
   }
 
   documentRoot.addEventListener('keydown', onKeyDown, true)
-  return () => {
-    close()
-    documentRoot.removeEventListener('keydown', onKeyDown, true)
+  return {
+    open,
+    dispose: () => {
+      close()
+      documentRoot.removeEventListener('keydown', onKeyDown, true)
+    },
   }
+}
+
+/** 兼容旧签名：仅安装并返回卸载函数。 */
+export function installSessionSwitcher(
+  sessions: SwitcherSessions,
+  documentRoot: Document = document,
+): () => void {
+  return createSessionSwitcher(sessions, documentRoot).dispose
 }

@@ -219,7 +219,7 @@ public sealed class ClientUpdateService
             var requestUri = $"https://api.github.com/repos/{UpdateRepository}/releases/latest";
             var userAgent = $"DSHSharp/{DshSharpCompatibility.ProductVersion}";
             // GitHub API 必须携带 User-Agent；回退链：直连 → 系统代理 → git 配置代理 → 常见本地代理端口。
-            using var response = await HttpFallback.GetAsync(requestUri, CheckTimeout, userAgent, ct);
+            using var response = await HttpFallback.GetAsync(requestUri, CheckTimeout, userAgent, ct: ct);
             if (!response.IsSuccessStatusCode)
             {
                 Log?.Invoke($"release check failed: HTTP {(int)response.StatusCode}");
@@ -272,24 +272,90 @@ public sealed class ClientUpdateService
         }
     }
 
+    /// <summary>GitHub 资产加速镜像模板：{0} 替换为完整原始 URL。链路顺序：原始 → 镜像。</summary>
+    internal static readonly string[] AssetMirrorTemplates =
+    [
+        "{0}",
+        "https://ghproxy.net/{0}",
+        "https://gh-proxy.com/{0}",
+    ];
+
+    /// <summary>构造某个原始资产 URL 的全部下载候选（原始 + 镜像）。</summary>
+    internal static IReadOnlyList<string> BuildDownloadCandidates(string primaryUrl) =>
+        AssetMirrorTemplates.Select(template => string.Format(template, primaryUrl)).ToList();
+
+    /// <summary>
+    /// 断点续传下载：候选链（原始+镜像）逐一尝试，失败从已下载字节数续传（.part 文件），
+    /// 完成后校验总字节数并落为正式文件。全链失败返回 null 并置 DownloadFailed。
+    /// </summary>
     private async Task<string?> DownloadFileAsync(string url, string targetPath, long totalBytes, CancellationToken ct)
     {
-        using var response = await HttpFallback.GetAsync(url, DownloadTimeout, userAgent: $"DSHSharp/{DshSharpCompatibility.ProductVersion}", ct: ct);
-        if (!response.IsSuccessStatusCode)
+        var partPath = targetPath + ".part";
+        var candidates = BuildDownloadCandidates(url);
+        Exception? lastError = null;
+
+        foreach (var candidate in candidates)
         {
-            SetState(_state with { Phase = "DownloadFailed", Error = $"下载失败：HTTP {(int)response.StatusCode}" });
-            return null;
+            try
+            {
+                var downloaded = await DownloadCandidateAsync(candidate, partPath, totalBytes, ct);
+                if (downloaded is null)
+                {
+                    continue;
+                }
+
+                File.Move(partPath, targetPath, overwrite: true);
+                return targetPath;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or IOException or InvalidOperationException)
+            {
+                lastError = ex;
+                Log?.Invoke($"download candidate failed ({candidate}): {ex.Message}，保留断点续传");
+            }
         }
 
+        TryDelete(partPath);
+        SetState(_state with
+        {
+            Phase = "DownloadFailed",
+            Error = $"下载失败（已尝试原始与镜像链路）：{lastError?.Message ?? "无可用链路"}",
+        });
+        return null;
+    }
+
+    /// <summary>单个候选 URL 的续传下载；失败抛出（.part 保留给下一候选续用）。</summary>
+    private async Task<long?> DownloadCandidateAsync(string url, string partPath, long totalBytes, CancellationToken ct)
+    {
+        var existing = File.Exists(partPath) ? new FileInfo(partPath).Length : 0;
+        using var response = await HttpFallback.GetAsync(
+            url, DownloadTimeout,
+            userAgent: $"DSHSharp/{DshSharpCompatibility.ProductVersion}",
+            rangeFrom: existing > 0 ? existing : null,
+            ct: ct);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new HttpRequestException($"HTTP {(int)response.StatusCode}");
+        }
+
+        // 服务器忽略 Range（200 全量）或续传起点不符时，从头写。
+        var resumed = (int)response.StatusCode == 206 &&
+                      response.Content.Headers.ContentRange?.From == existing;
         if (totalBytes <= 0)
         {
-            totalBytes = response.Content.Headers.ContentLength ?? 0;
+            totalBytes = (response.Content.Headers.ContentLength ?? 0) + (resumed ? existing : 0);
         }
 
         await using var source = await response.Content.ReadAsStreamAsync(ct);
-        await using var target = new FileStream(targetPath, FileMode.Create, FileAccess.Write, FileShare.None, 128 * 1024, useAsync: true);
+        await using var target = new FileStream(
+            partPath,
+            resumed ? FileMode.Append : FileMode.Create,
+            FileAccess.Write, FileShare.None, 128 * 1024, useAsync: true);
         var buffer = new byte[128 * 1024];
-        long written = 0;
+        long written = existing;
         int read;
         var lastReported = -1;
         while ((read = await source.ReadAsync(buffer, ct)) > 0)
@@ -307,7 +373,12 @@ public sealed class ClientUpdateService
             }
         }
 
-        return written > 0 ? targetPath : null;
+        if (totalBytes > 0 && written != totalBytes)
+        {
+            throw new IOException($"下载数据不完整（{written}/{totalBytes}）");
+        }
+
+        return written;
     }
 
     /// <summary>创建 GitHub 访问客户端（保留供诊断/测试使用；运行时走 <see cref="HttpFallback"/> 回退链）。</summary>

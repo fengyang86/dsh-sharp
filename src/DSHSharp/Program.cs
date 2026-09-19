@@ -30,11 +30,33 @@ internal static class Program
         }
 
         App.AutoStartLaunch = args.Contains("--autostart", StringComparer.OrdinalIgnoreCase);
+        App.PendingDeepLinkSession = ParseDeepLinkSession(args);
 
         singleInstance.StartListener(() =>
             Dispatcher.UIThread.Post(() => App.Instance?.ActivateMainWindow()));
 
         return BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
+    }
+
+    /// <summary>解析 dshsharp://session/&lt;id&gt; 深链参数（安装器注册的 URL 协议传入）。</summary>
+    internal static string? ParseDeepLinkSession(string[] args)
+    {
+        foreach (var arg in args)
+        {
+            if (!arg.StartsWith("dshsharp://", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (Uri.TryCreate(arg, UriKind.Absolute, out var uri) &&
+                string.Equals(uri.Host, "session", StringComparison.OrdinalIgnoreCase))
+            {
+                var id = uri.AbsolutePath.Trim('/');
+                return id.Length > 0 ? id : null;
+            }
+        }
+
+        return null;
     }
 
     private static (string InstallDir, int WaitForPid)? ParseApplyUpdate(string[] args)

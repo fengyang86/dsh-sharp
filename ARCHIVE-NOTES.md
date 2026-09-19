@@ -17,6 +17,14 @@
 - **`import.meta.main` 陷阱依旧**：Node 22.17 直跑 `lib/bin.js` 仍静默退出 0，runCli 包装器仍必需
 - **npm dist-tags**：`latest=0.1.5-rc.2`、`alpha=0.1.6-alpha.2`；`engines.node` 自 0.1.5-rc.1 起即为 `^22.19.0 || >=24`（仅警告不阻断）
 
+### v0.3.0 开发期新发现（2026-09-19）
+
+- **`turn/end` 结局分类**（`packages/core/session/src/types.ts` 的 `TurnEndReasonMap`）：`completed` / `aborted`（用户取消，含 Esc）/ `blocked` / `error`（带结构化 `LlmFailure.message`）/ 输出 token 上限等插件可扩展变体；session/page 记录里位于 `event.data.reason`，是区分"完成/失败"通知的权威信号
+- **`data-ds-theme-source`**（`packages/client/ui-layout/src/client/theme-presenter.ts`）：web 端在 `<html>` 上发布 `light/dark/system`，**专为宿主壳镜像设计**（官方 Electron 转发到 `nativeTheme.themeSource`）；配套 `body[data-ds-dark-theme]` 选择暗色 token 面板。壳侧镜像路径：插件 MutationObserver → `chrome.webview.postMessage`（WebView2 宿主桥，普通浏览器不存在，静默降级）→ 壳 `WebMessageReceived`
+- **杀软扫描窗口**：新装文件落地后数分钟内，pnpm 穿 junction 的 `open` 可能瞬时失败（`UNKNOWN: open`、负退出码），而裸 `fs` 读同一路径正常——插件链接操作需要"隔 15 秒重试一次"的自愈
+- **WebView2 默认下载条**：Avalonia.Controls.WebView 12.1 未暴露下载事件（`DownloadStarting` 等不存在），WebView2 自带下载 UI 即默认行为，无自定义点（留档：升级包装器版本时复查）
+- **消息窗口热键**：Avalonia(Win32) 的 UI 线程消息循环会分发自建 message-only 窗口（`RegisterClass` + `CreateWindowEx(HWND_MESSAGE)`）的 `WM_HOTKEY`，无需额外消息泵——OS 级全局热键的可行路径
+
 ## 一、为什么归档（已作废，留档）
 
 DeepSeek 官方已在 `deepseek-ai/deepseek-harness` 仓库内实现自己的 Electron 桌面端：

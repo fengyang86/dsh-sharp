@@ -185,6 +185,31 @@ public partial class MainWindow : Window
         App.Log($"webview navigate to session: {sessionId}");
     }
 
+    /// <summary>导航到无会话参数的干净首页（托盘"新建会话"）。</summary>
+    public void NavigateHome()
+    {
+        var app = App.Instance;
+        var baseUrl = app?.RuntimeUrl ?? AppSettings.DefaultWebUrl;
+        var hash = app is not null ? $"#{App.BuildPluginFeatureHash(app.Settings)}" : string.Empty;
+        Web.Source = new Uri($"{baseUrl.TrimEnd('/')}/{hash}");
+        App.Log("webview navigate home");
+    }
+
+    /// <summary>通过 fragment 通道触发插件能力（如 dshsharp-switcher=1 呼出切换器）。</summary>
+    public void NavigateToPluginHash(string pluginKey)
+    {
+        var app = App.Instance;
+        var baseUrl = app?.RuntimeUrl ?? AppSettings.DefaultWebUrl;
+        var hash = pluginKey;
+        if (app is not null)
+        {
+            hash += $"&{App.BuildPluginFeatureHash(app.Settings)}";
+        }
+
+        Web.Source = new Uri($"{baseUrl.TrimEnd('/')}#{hash}");
+        App.Log($"webview plugin hash navigation: {pluginKey}");
+    }
+
     /// <summary>显示/隐藏 Runtime 启动与故障页。</summary>
     public void ShowOnboarding(bool show, string? detail, bool busy)
     {

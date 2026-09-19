@@ -49,6 +49,13 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 chinesesimplified.DataNote=卸载不会删除会话数据（%USERPROFILE%\AppData\Roaming\DSHSharp），如需彻底清理请手动删除该目录。
 english.DataNote=Uninstalling keeps session data (%USERPROFILE%\AppData\Roaming\DSHSharp). Delete that folder manually for a full cleanup.
 
+[Registry]
+; dshsharp:// 深链协议（每用户注册，随卸载清理）：dshsharp://session/<id> 直达会话。
+Root: HKA; Subkey: "Software\Classes\dshsharp"; ValueType: string; ValueName: ""; ValueData: "URL:DSH-Sharp 会话深链"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\dshsharp"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\dshsharp\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\DSHSharp.exe,0"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\dshsharp\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\DSHSharp.exe"" ""%1"""; Flags: uninsdeletekey
+
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: checkedonce
 

@@ -120,7 +120,27 @@ window.__ModuleLoader__.load({
 			const title = entry.title?.trim();
 			return title !== void 0 && title !== "" ? title : id.slice(0, 8);
 		}
-		function installSessionSwitcher(sessions, documentRoot = document) {
+		const DARK_PALETTE = {
+			backdrop: "rgba(15, 18, 25, 0.45)",
+			panelBackground: "rgb(24, 27, 36)",
+			panelForeground: "rgb(232, 236, 245)",
+			panelShadow: "0 18px 48px rgba(0, 0, 0, 0.45)",
+			divider: "rgba(255, 255, 255, 0.12)",
+			activeRow: "rgba(90, 130, 255, 0.25)"
+		};
+		const LIGHT_PALETTE = {
+			backdrop: "rgba(120, 130, 150, 0.35)",
+			panelBackground: "rgb(252, 252, 250)",
+			panelForeground: "rgb(28, 32, 43)",
+			panelShadow: "0 18px 48px rgba(30, 40, 60, 0.25)",
+			divider: "rgba(0, 0, 0, 0.12)",
+			activeRow: "rgba(70, 110, 235, 0.18)"
+		};
+		/** 跟随 WebUI 主题选择配色：body[data-ds-dark-theme] 是官方暗色面板标记。 */
+		function paletteFor(documentRoot) {
+			return documentRoot.body.hasAttribute("data-ds-dark-theme") ? DARK_PALETTE : LIGHT_PALETTE;
+		}
+		function createSessionSwitcher(sessions, documentRoot = document) {
 			let root;
 			let input;
 			let listEl;
@@ -136,12 +156,14 @@ window.__ModuleLoader__.load({
 					input?.focus();
 					return;
 				}
+				const palette = paletteFor(documentRoot);
+				currentPalette = palette;
 				root = documentRoot.createElement("div");
 				Object.assign(root.style, {
 					position: "fixed",
 					inset: "0",
 					zIndex: "9999",
-					background: "rgba(15, 18, 25, 0.45)",
+					background: palette.backdrop,
 					display: "flex",
 					justifyContent: "center",
 					alignItems: "flex-start",
@@ -156,9 +178,9 @@ window.__ModuleLoader__.load({
 					width: "min(560px, 92vw)",
 					borderRadius: "12px",
 					overflow: "hidden",
-					background: "rgb(24, 27, 36)",
-					color: "rgb(232, 236, 245)",
-					boxShadow: "0 18px 48px rgba(0, 0, 0, 0.45)"
+					background: palette.panelBackground,
+					color: palette.panelForeground,
+					boxShadow: palette.panelShadow
 				});
 				input = documentRoot.createElement("input");
 				input.type = "text";
@@ -172,7 +194,7 @@ window.__ModuleLoader__.load({
 					fontSize: "15px",
 					background: "transparent",
 					color: "inherit",
-					borderBottom: "1px solid rgba(255, 255, 255, 0.12)"
+					borderBottom: `1px solid ${palette.divider}`
 				});
 				input.addEventListener("input", () => render(input.value));
 				input.addEventListener("keydown", (event) => {
@@ -207,11 +229,12 @@ window.__ModuleLoader__.load({
 				render("");
 				input.focus();
 			};
+			let currentPalette = DARK_PALETTE;
 			const updateSelection = () => {
 				listEl?.querySelectorAll("[data-switcher-item]").forEach((node, index) => {
 					const el = node;
 					const active = index === selected;
-					el.style.background = active ? "rgba(90, 130, 255, 0.25)" : "transparent";
+					el.style.background = active ? currentPalette.activeRow : "transparent";
 					if (active) el.scrollIntoView?.({ block: "nearest" });
 				});
 			};
@@ -274,9 +297,12 @@ window.__ModuleLoader__.load({
 				else close();
 			};
 			documentRoot.addEventListener("keydown", onKeyDown, true);
-			return () => {
-				close();
-				documentRoot.removeEventListener("keydown", onKeyDown, true);
+			return {
+				open,
+				dispose: () => {
+					close();
+					documentRoot.removeEventListener("keydown", onKeyDown, true);
+				}
 			};
 		}
 		//#endregion
@@ -439,7 +465,20 @@ window.__ModuleLoader__.load({
 			const features = readFeatureFlags();
 			ctx.effect(() => features.escStop ? installSessionShortcuts(ctx.sessions) : () => {}, "dsh-sharp-session: document keyboard listener");
 			ctx.effect(() => features.trayNavigation ? installSessionNavigation(ctx.sessions) : () => {}, "dsh-sharp-session: tray session navigation");
-			ctx.effect(() => installSessionSwitcher(ctx.sessions), "dsh-sharp-session: Ctrl+K session switcher");
+			ctx.effect(() => {
+				const switcher = createSessionSwitcher(ctx.sessions);
+				const openFromHash = () => {
+					if (window.location.hash.match(/(?:^#|&)dshsharp-switcher=1/) === null) return;
+					history.replaceState(null, "", window.location.pathname);
+					switcher.open();
+				};
+				window.addEventListener("hashchange", openFromHash);
+				openFromHash();
+				return () => {
+					window.removeEventListener("hashchange", openFromHash);
+					switcher.dispose();
+				};
+			}, "dsh-sharp-session: Ctrl+K session switcher");
 			ctx.effect(() => installThemeBridge(), "dsh-sharp-session: theme bridge to host shell");
 			ctx.slots.inject("shell.overlay", () => ctx.slots.register({
 				name: "shell.overlay",

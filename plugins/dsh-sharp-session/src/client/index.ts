@@ -1,5 +1,5 @@
 import { installSessionNavigation, installSessionShortcuts, readFeatureFlags, type ShortcutSessions } from './shortcut.ts'
-import { installSessionSwitcher } from './switcher.ts'
+import { createSessionSwitcher } from './switcher.ts'
 import { installThemeBridge } from './theme-bridge.ts'
 import { openWorkspacePath, type ShortcutConnection } from './workspace-open.ts'
 import { ContextMenuView } from './ContextMenuView.tsx'
@@ -32,7 +32,21 @@ export function apply(ctx: ShortcutContext): void {
     'dsh-sharp-session: tray session navigation',
   )
   ctx.effect(
-    () => installSessionSwitcher(ctx.sessions),
+    () => {
+      const switcher = createSessionSwitcher(ctx.sessions)
+      // hash 通道：桌面壳的全局热键/托盘经 URL fragment 呼出切换器（与托盘会话跳转同机制）。
+      const openFromHash = (): void => {
+        if (window.location.hash.match(/(?:^#|&)dshsharp-switcher=1/) === null) return
+        history.replaceState(null, '', window.location.pathname)
+        switcher.open()
+      }
+      window.addEventListener('hashchange', openFromHash)
+      openFromHash()
+      return () => {
+        window.removeEventListener('hashchange', openFromHash)
+        switcher.dispose()
+      }
+    },
     'dsh-sharp-session: Ctrl+K session switcher',
   )
   ctx.effect(

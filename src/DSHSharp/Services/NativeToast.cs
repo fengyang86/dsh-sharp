@@ -37,11 +37,13 @@ internal static class NativeToast
         };
     }
 
-    /// <summary>展示会话回合结局通知（系统默认提示音）：toastTitle 为"会话已完成/会话回合失败"。</summary>
+    /// <summary>展示会话回合结局通知（系统默认提示音）：toastTitle 为"会话已完成/会话回合失败"。
+    /// 同一 Header 分组：操作中心里聚合在"DSH-Sharp 会话动态"下，不逐条堆叠。</summary>
     internal static void ShowSessionCompleted(string sessionId, string toastTitle, string sessionName, string? preview)
     {
         var builder = new ToastContentBuilder()
             .AddArgument("session", sessionId)
+            .AddHeader("dshsharp-sessions", "DSH-Sharp 会话动态", string.Empty)
             .AddText(toastTitle)
             .AddText(sessionName);
         if (!string.IsNullOrEmpty(preview))
