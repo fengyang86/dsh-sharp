@@ -532,7 +532,23 @@ public partial class App : Application
 
                 var item = new NativeMenuItem((session.Running ? "● " : "") + title);
                 var sessionId = session.SessionId;
-                item.Click += (_, _) => SafePost("tray:session", () => NavigateToSession(sessionId));
+                if (!string.IsNullOrEmpty(session.Cwd))
+                {
+                    // 每个会话附带"打开所在目录"：查"这个会话在哪个仓库跑"不用进 WebUI。
+                    var cwd = session.Cwd;
+                    item.Menu = new NativeMenu();
+                    var openItem = new NativeMenuItem("打开会话");
+                    openItem.Click += (_, _) => SafePost("tray:session", () => NavigateToSession(sessionId));
+                    var revealItem = new NativeMenuItem("打开所在目录");
+                    revealItem.Click += (_, _) => SafePost("tray:workspace", () => OpenDirectoryInFileManager(cwd));
+                    item.Menu.Items.Add(openItem);
+                    item.Menu.Items.Add(revealItem);
+                }
+                else
+                {
+                    item.Click += (_, _) => SafePost("tray:session", () => NavigateToSession(sessionId));
+                }
+
                 menu.Items.Add(item);
             }
         });
@@ -559,6 +575,20 @@ public partial class App : Application
     {
         ActivateMainWindow();
         _mainWindow?.NavigateToSession(sessionId);
+    }
+
+    /// <summary>在系统文件管理器中打开目录（托盘"打开所在目录"）。</summary>
+    private static void OpenDirectoryInFileManager(string directory)
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(directory) { UseShellExecute = true });
+            Log($"opened workspace directory: {directory}");
+        }
+        catch (Exception ex)
+        {
+            Log($"open workspace directory failed ({directory}): {ex.Message}");
+        }
     }
 
     /// <summary>托盘"关于"：弹出版本信息 Toast。</summary>
@@ -851,7 +881,7 @@ public partial class App : Application
         Dispatcher.UIThread.Post(() => UpdateRunningIndicator(e.Count));
     }
 
-    /// <summary>UI 线程：根据运行中会话数刷新窗口标题与任务栏状态指示。</summary>
+    /// <summary>UI 线程：根据运行中会话数刷新窗口标题、任务栏状态与托盘 tooltip。</summary>
     private void UpdateRunningIndicator(int count)
     {
         try
@@ -863,6 +893,13 @@ public partial class App : Application
                     : BaseWindowTitle;
                 var handle = window.TryGetPlatformHandle()?.Handle ?? 0;
                 Services.WindowsTaskbarProgress.SetRunningIndicator(handle, count > 0);
+            }
+
+            if (_trayIcon is not null)
+            {
+                var running = count > 0 ? $" · {count} 个会话运行中" : string.Empty;
+                var runtime = _serviceOnline ? $" · {RuntimeBaseUrl}" : " · Runtime 未运行";
+                _trayIcon.ToolTipText = $"DSH-Sharp v{DshSharpCompatibility.ProductVersion}{running}{runtime}";
             }
 
             // 事件驱动的即时刷新：托盘菜单里的 "●" 运行标记与列表次序保持新鲜（复用节流调度）。
@@ -1055,6 +1092,52 @@ public partial class App : Application
 
     private static string ShortId(string sessionId) =>
         sessionId.Length <= 8 ? sessionId : sessionId[..8];
+
+    /// <summary>
+    /// 处理 WebUI 主题桥消息：web 端的 data-ds-theme-source 是为宿主壳镜像设计的官方信号。
+    /// 仅当壳主题设置为 System 时镜像 web 的浅/深选择；用户显式固定 Light/Dark 时壳设置优先。
+    /// </summary>
+    public void ApplyWebThemeMessage(string body)
+    {
+        try
+        {
+            if (!body.Contains("dshsharp-theme", StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            using var doc = System.Text.Json.JsonDocument.Parse(body);
+            if (!doc.RootElement.TryGetProperty("source", out var sourceEl) ||
+                sourceEl.GetString() is not { } source)
+            {
+                return;
+            }
+
+            if (Settings.Theme != "System")
+            {
+                return;
+            }
+
+            Dispatcher.UIThread.Post(() =>
+            {
+                var theme = source switch
+                {
+                    "dark" => "Dark",
+                    "light" => "Light",
+                    _ => "System",
+                };
+                ApplyTheme(theme);
+            });
+        }
+        catch (Exception ex) when (ex is System.Text.Json.JsonException)
+        {
+            // 非 JSON 消息：忽略。
+        }
+        catch (Exception ex)
+        {
+            Log($"web theme message failed: {ex.Message}");
+        }
+    }
 
     private static void ApplyTheme(string theme)
     {

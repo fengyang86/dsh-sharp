@@ -104,6 +104,208 @@ window.__ModuleLoader__.load({
 			};
 		}
 		//#endregion
+		//#region src/client/switcher.ts
+		/** 列表最多展示的条目数。 */
+		const MAX_ITEMS = 12;
+		function filterSessions(entries, query) {
+			const needle = query.trim().toLowerCase();
+			return (needle === "" ? entries : entries.filter(({ id, entry }) => displayName(id, entry).toLowerCase().includes(needle) || id.toLowerCase().includes(needle))).slice().sort((left, right) => {
+				const lu = left.entry.updatedAt ?? 0;
+				const ru = right.entry.updatedAt ?? 0;
+				if (lu !== ru) return ru - lu;
+				return left.id.localeCompare(right.id);
+			}).slice(0, MAX_ITEMS);
+		}
+		function displayName(id, entry) {
+			const title = entry.title?.trim();
+			return title !== void 0 && title !== "" ? title : id.slice(0, 8);
+		}
+		function installSessionSwitcher(sessions, documentRoot = document) {
+			let root;
+			let input;
+			let listEl;
+			let selected = 0;
+			let visible = [];
+			const close = () => {
+				if (root === void 0) return;
+				root.remove();
+				root = input = listEl = void 0;
+			};
+			const open = () => {
+				if (root !== void 0) {
+					input?.focus();
+					return;
+				}
+				root = documentRoot.createElement("div");
+				Object.assign(root.style, {
+					position: "fixed",
+					inset: "0",
+					zIndex: "9999",
+					background: "rgba(15, 18, 25, 0.45)",
+					display: "flex",
+					justifyContent: "center",
+					alignItems: "flex-start",
+					paddingTop: "14vh",
+					fontFamily: "system-ui, sans-serif"
+				});
+				root.addEventListener("mousedown", (event) => {
+					if (event.target === root) close();
+				});
+				const panel = documentRoot.createElement("div");
+				Object.assign(panel.style, {
+					width: "min(560px, 92vw)",
+					borderRadius: "12px",
+					overflow: "hidden",
+					background: "rgb(24, 27, 36)",
+					color: "rgb(232, 236, 245)",
+					boxShadow: "0 18px 48px rgba(0, 0, 0, 0.45)"
+				});
+				input = documentRoot.createElement("input");
+				input.type = "text";
+				input.placeholder = "切换到会话…（↑↓ 选择，回车打开，Esc 关闭）";
+				Object.assign(input.style, {
+					width: "100%",
+					boxSizing: "border-box",
+					padding: "14px 16px",
+					border: "none",
+					outline: "none",
+					fontSize: "15px",
+					background: "transparent",
+					color: "inherit",
+					borderBottom: "1px solid rgba(255, 255, 255, 0.12)"
+				});
+				input.addEventListener("input", () => render(input.value));
+				input.addEventListener("keydown", (event) => {
+					if (event.key === "Escape") {
+						event.preventDefault();
+						close();
+					} else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+						event.preventDefault();
+						if (visible.length === 0) return;
+						selected = event.key === "ArrowDown" ? (selected + 1) % visible.length : (selected - 1 + visible.length) % visible.length;
+						updateSelection();
+					} else if (event.key === "Enter") {
+						event.preventDefault();
+						const target = visible[selected];
+						if (target === void 0) return;
+						close();
+						try {
+							sessions.open(target.id);
+						} catch (error) {
+							console.error("[dsh-sharp-session] 切换会话失败:", error);
+						}
+					}
+				});
+				listEl = documentRoot.createElement("div");
+				Object.assign(listEl.style, {
+					maxHeight: "46vh",
+					overflowY: "auto"
+				});
+				panel.append(input, listEl);
+				root.append(panel);
+				documentRoot.body.append(root);
+				render("");
+				input.focus();
+			};
+			const updateSelection = () => {
+				listEl?.querySelectorAll("[data-switcher-item]").forEach((node, index) => {
+					const el = node;
+					const active = index === selected;
+					el.style.background = active ? "rgba(90, 130, 255, 0.25)" : "transparent";
+					if (active) el.scrollIntoView?.({ block: "nearest" });
+				});
+			};
+			const render = (query) => {
+				if (listEl === void 0) return;
+				const snapshot = sessions.list.getSnapshot();
+				visible = filterSessions(Object.entries(snapshot.byId).filter((pair) => pair[1] !== void 0).map(([id, entry]) => ({
+					id,
+					entry
+				})), query);
+				selected = 0;
+				listEl.replaceChildren();
+				if (visible.length === 0) {
+					const empty = documentRoot.createElement("div");
+					empty.textContent = query.trim() === "" ? "（会话列表为空）" : "（无匹配会话）";
+					Object.assign(empty.style, {
+						padding: "16px",
+						fontSize: "13px",
+						opacity: "0.6"
+					});
+					listEl.append(empty);
+					return;
+				}
+				for (const { id, entry } of visible) {
+					const row = documentRoot.createElement("div");
+					row.dataset.switcherItem = "";
+					Object.assign(row.style, {
+						display: "flex",
+						alignItems: "center",
+						gap: "8px",
+						padding: "10px 16px",
+						fontSize: "14px",
+						cursor: "pointer"
+					});
+					const label = documentRoot.createElement("span");
+					label.textContent = (entry.running ? "● " : "") + displayName(id, entry);
+					label.style.flex = "1";
+					label.style.overflow = "hidden";
+					label.style.textOverflow = "ellipsis";
+					label.style.whiteSpace = "nowrap";
+					row.append(label);
+					row.addEventListener("click", () => {
+						close();
+						try {
+							sessions.open(id);
+						} catch (error) {
+							console.error("[dsh-sharp-session] 切换会话失败:", error);
+						}
+					});
+					listEl.append(row);
+				}
+				updateSelection();
+			};
+			const onKeyDown = (event) => {
+				if (event.repeat || event.isComposing) return;
+				if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "k") return;
+				event.preventDefault();
+				event.stopPropagation();
+				if (root === void 0) open();
+				else close();
+			};
+			documentRoot.addEventListener("keydown", onKeyDown, true);
+			return () => {
+				close();
+				documentRoot.removeEventListener("keydown", onKeyDown, true);
+			};
+		}
+		//#endregion
+		//#region src/client/theme-bridge.ts
+		/**
+		* 主题桥：把 DSH WebUI 的主题选择镜像给桌面壳。
+		* web 端在 <html data-ds-theme-source> 上发布 light/dark/system，
+		* 该属性本就是为宿主壳镜像设计的官方信号（官方 Electron 同样消费它）。
+		* 经 WebView2 的 chrome.webview.postMessage 送达壳的 WebMessageReceived；
+		* 普通浏览器中该通道不存在，静默降级为无操作。
+		*/
+		const THEME_SOURCE_ATTRIBUTE = "data-ds-theme-source";
+		function installThemeBridge(documentRoot = document) {
+			const post = (source) => {
+				(window.chrome?.webview)?.postMessage?.(JSON.stringify({
+					type: "dshsharp-theme",
+					source
+				}));
+			};
+			const readSource = () => documentRoot.documentElement.getAttribute("data-ds-theme-source") ?? "system";
+			const observer = new MutationObserver(() => post(readSource()));
+			observer.observe(documentRoot.documentElement, {
+				attributes: true,
+				attributeFilter: [THEME_SOURCE_ATTRIBUTE]
+			});
+			post(readSource());
+			return () => observer.disconnect();
+		}
+		//#endregion
 		//#region src/client/workspace-open.ts
 		/**
 		* 在系统文件管理器中打开一个工作区目录。
@@ -237,6 +439,8 @@ window.__ModuleLoader__.load({
 			const features = readFeatureFlags();
 			ctx.effect(() => features.escStop ? installSessionShortcuts(ctx.sessions) : () => {}, "dsh-sharp-session: document keyboard listener");
 			ctx.effect(() => features.trayNavigation ? installSessionNavigation(ctx.sessions) : () => {}, "dsh-sharp-session: tray session navigation");
+			ctx.effect(() => installSessionSwitcher(ctx.sessions), "dsh-sharp-session: Ctrl+K session switcher");
+			ctx.effect(() => installThemeBridge(), "dsh-sharp-session: theme bridge to host shell");
 			ctx.slots.inject("shell.overlay", () => ctx.slots.register({
 				name: "shell.overlay",
 				id: "dsh-sharp-session.context-menu",

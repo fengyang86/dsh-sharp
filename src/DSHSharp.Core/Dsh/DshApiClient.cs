@@ -6,7 +6,7 @@ namespace DSHSharp.Core.Dsh;
 
 /// <summary>会话列表项摘要。</summary>
 /// <param name="AsOfSeq">会话投影的最新事件序号，作为 session/page 的 throughSeq 上界。</param>
-public sealed record DshSessionSummary(string SessionId, string? Title, bool Running, long UpdatedAt, long AsOfSeq = 0, bool Archived = false);
+public sealed record DshSessionSummary(string SessionId, string? Title, bool Running, long UpdatedAt, long AsOfSeq = 0, bool Archived = false, string? Cwd = null);
 
 /// <summary>
 /// DSH HTTP RPC 客户端：按官方协议调用 <c>POST /api/&lt;method&gt;</c>，
@@ -280,6 +280,9 @@ public static class DshRpcParser
                 var updatedAt = item.TryGetProperty("updatedAt", out var updatedEl)
                     ? updatedEl.GetInt64()
                     : 0L;
+                var cwd = item.TryGetProperty("cwd", out var cwdEl) && cwdEl.ValueKind == JsonValueKind.String
+                    ? cwdEl.GetString()
+                    : null;
                 var archived = item.TryGetProperty("archived", out var archivedEl) && archivedEl.ValueKind == JsonValueKind.True;
                 if (!archived && item.TryGetProperty("status", out var statusEl) &&
                     string.Equals(statusEl.GetString(), "archived", StringComparison.OrdinalIgnoreCase))
@@ -293,7 +296,7 @@ public static class DshRpcParser
                 {
                     archived = true;
                 }
-                result.Add(new DshSessionSummary(sessionId, title, running, updatedAt, asOfSeq, archived));
+                result.Add(new DshSessionSummary(sessionId, title, running, updatedAt, asOfSeq, archived, cwd));
             }
         }
         catch (Exception ex) when (ex is JsonException or InvalidOperationException)

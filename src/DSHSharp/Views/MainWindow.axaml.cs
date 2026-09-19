@@ -33,6 +33,8 @@ public partial class MainWindow : Window
         // 外链分流：非 WebUI 自身的目标交给系统，内嵌视图只承载 DSH。
         Web.NavigationStarted += OnWebViewNavigationStarted;
         Web.NewWindowRequested += OnWebViewNewWindowRequested;
+        // 主题桥：WebUI 经 chrome.webview.postMessage 上报主题选择，壳在 System 模式下镜像。
+        Web.WebMessageReceived += OnWebMessageReceived;
 
         WindowStateProperty.Changed.AddClassHandler<Window>(OnWindowStateChanged);
         Opened += (_, _) => RestoreWindowState();
@@ -57,8 +59,18 @@ public partial class MainWindow : Window
         OpenInSystemBrowser(e.Request!);
     }
 
-    private void OnWebViewNewWindowRequested(object? sender, WebViewNewWindowRequestedEventArgs e)
+    /// <summary>WebUI 主题桥消息（插件经 chrome.webview.postMessage 发送）。</summary>
+    private void OnWebMessageReceived(object? sender, WebMessageReceivedEventArgs e)
     {
+        if (string.IsNullOrEmpty(e.Body))
+        {
+            return;
+        }
+
+        App.Instance?.ApplyWebThemeMessage(e.Body);
+    }
+
+    private void OnWebViewNewWindowRequested(object? sender, WebViewNewWindowRequestedEventArgs e)    {
         e.Handled = true;
         if (e.Request is { } request && !ExternalLinkPolicy.ShouldOpenExternally(request, CurrentRuntimeOrigin()))
         {
