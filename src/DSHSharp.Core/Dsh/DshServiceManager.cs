@@ -1050,7 +1050,7 @@ public sealed class DshServiceManager : IDisposable
             AppendLog("--- removing stale bundled plugin link ---");
             try
             {
-                var removeExit = await RunInstallProcessAsync(
+                var removeExit = await RunPluginStepWithRetryAsync(
                     CreatePluginCliStartInfo("plugin", "--profile", "web", "remove", BundledSessionPackage), ct);
                 if (removeExit != 0)
                 {
@@ -1068,7 +1068,7 @@ public sealed class DshServiceManager : IDisposable
         AppendLog("--- installing bundled dsh-sharp-session plugin ---");
         try
         {
-            var exitCode = await RunInstallProcessAsync(
+            var exitCode = await RunPluginStepWithRetryAsync(
                 CreatePluginCliStartInfo("plugin", "--profile", "web", "add", expectedSpec), ct);
             if (exitCode != 0 ||
                 !IsProfileDependencyCurrent(profileManifest, BundledSessionPackage, expectedSpec))
@@ -1085,6 +1085,29 @@ public sealed class DshServiceManager : IDisposable
             LastError = WithLogTail($"内置快捷键插件安装失败：{ex.Message}");
             return false;
         }
+    }
+
+    /// <summary>插件链接步骤带一次重试：新装/杀软实时扫描窗口期，pnpm 穿 junction 的
+    /// 打开可能瞬时失败（UNKNOWN: open、负退出码），隔 15 秒重试一次即可通过。</summary>
+    private async Task<int> RunPluginStepWithRetryAsync(ProcessStartInfo startInfo, CancellationToken ct)
+    {
+        var exitCode = await RunInstallProcessAsync(startInfo, ct);
+        if (exitCode == 0)
+        {
+            return 0;
+        }
+
+        Log?.Invoke($"plugin step failed (exit {exitCode}), retrying once in 15s");
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(15), ct);
+        }
+        catch (OperationCanceledException)
+        {
+            return exitCode;
+        }
+
+        return await RunInstallProcessAsync(startInfo, ct);
     }
 
     /// <summary>迁移旧快捷键包，避免新旧插件同时注册 Esc 监听器。</summary>
