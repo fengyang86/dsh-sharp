@@ -26,6 +26,7 @@ public enum ManagedMode
 /// DSH 服务进程托管：
 /// <list type="bullet">
 /// <item>探测服务在线状态（与 DshEventMonitor 的心跳互补，供启动前/就绪轮询使用）；</item>
+/// <item>启动前环境预检：Node 缺失或版本不足时自动下载内置 Node 兜底（不改动系统 Node）；</item>
 /// <item>按托管模式拉起服务进程（私有 npm 包或源码 pnpm），等待端口就绪；</item>
 /// <item>所有权语义：只有本管理器拉起的进程才会被 Stop/Dispose 终止；</item>
 /// <item>进程输出重定向到日志文件，意外退出触发事件。</item>
@@ -42,6 +43,25 @@ public sealed class DshServiceManager : IDisposable
     private const string ManagedPackageName = "@deepseek-ai/dsh";
     // pnpm 11.25 修复了安装时错误改写 allowBuilds 的问题。
     private const string ManagedPnpmSpec = "pnpm@11.25.0";
+    // pnpm@11.25 的 engines 要求 node >= 22.13（其 bundle 静态 require node:sqlite，
+    // 该模块 22.13 起才免 flag、Node 20 完全没有，旧版会在启动时抛 ERR_UNKNOWN_BUILTIN_MODULE）。
+    // 系统 Node 不达标时自动下载 NodeRuntimeService.NodeVersion 钉住的内置 Node 兜底；
+    // 调整任一版本必须同步验证另一个（见 VersionConsistencyTests）。
+    internal const string MinimumNodeVersion = "22.13.0";
+    // 首装网络兜底：registry.npmjs.org 直连失败且日志呈网络特征时，注入 npmmirror 镜像重试一次。
+    // 只做第二条链路不改变默认行为（镜像同步可能滞后，避免常态使用拿旧版本）。
+    internal const string RegistryMirrorUrl = "https://registry.npmmirror.com";
+
+    /// <summary>pnpm/npm 输出中的网络类失败特征（大小写不敏感匹配日志尾部）。</summary>
+    private static readonly string[] NetworkFailureTokens =
+    [
+        "ETIMEDOUT", "ETIMEOUT", "ECONNRESET", "ECONNREFUSED", "EPIPE", "ENOTFOUND", "EAI_AGAIN",
+        "EADDRNOTAVAIL", "EPROTO", "ECONNABORTED", "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+        "SELF_SIGNED_CERT_IN_CHAIN", "CERT_HAS_EXPIRED", "DEPTH_ZERO_SELF_SIGNED_CERT",
+        "ERR_PNPM_META_FETCH_FAIL", "ERR_PNPM_FETCH_401", "ERR_PNPM_NO_VERSIONS",
+        "fetch failed", "getaddrinfo", "request timeout", "network timeout",
+        "network request failed", "ERR! network",
+    ];
 
     private readonly Uri _baseUri;
     private Uri _activeBaseUri;
@@ -55,6 +75,8 @@ public sealed class DshServiceManager : IDisposable
     private readonly string _packageToolsDirectory;
     private readonly string _dshHomeDirectory;
     private readonly string _runtimePidPath;
+    private readonly string _registryMirrorMarkerPath;
+    private readonly NodeRuntimeService _nodeRuntime;
     private string? _runtimeBackupDirectory;
     private readonly string _bundledShortcutPluginDirectory;
     private readonly SemaphoreSlim _startLock = new(1, 1);
@@ -63,6 +85,8 @@ public sealed class DshServiceManager : IDisposable
     private bool _intentionalStop;
     private bool _disposed;
     private TaskCompletionSource<Uri>? _readyUrlSource;
+    // 非空 = 已激活内置 Node：本管理器拉起的全部子进程（含孙进程）一律用它。
+    private string? _managedNodeExe;
 
     public DshServiceManager(string baseUrl, ManagedMode mode, string? sourcePath, string? logDirectory = null)
     {
@@ -80,6 +104,8 @@ public sealed class DshServiceManager : IDisposable
         _packageToolsDirectory = Path.Combine(_packageDirectory, ".tools");
         _dshHomeDirectory = Path.Combine(dir, "dsh-home");
         _runtimePidPath = Path.Combine(dir, "dsh-runtime.pid");
+        _registryMirrorMarkerPath = Path.Combine(dir, ".registry-mirror-preferred");
+        _nodeRuntime = new NodeRuntimeService(Path.Combine(dir, "node-runtime"));
         _bundledShortcutPluginDirectory = Path.Combine(AppContext.BaseDirectory, "Plugins", "dsh-sharp-session");
     }
 
@@ -123,6 +149,12 @@ public sealed class DshServiceManager : IDisposable
     /// <summary>最近一次启动失败原因（成功启动后清空）。</summary>
     public string? LastError { get; private set; }
 
+    /// <summary>内置 Node 运行时（按需下载），宿主可订阅其 StateChanged 显示下载进度。</summary>
+    public NodeRuntimeService NodeRuntime => _nodeRuntime;
+
+    /// <summary>当前生效的 Node 环境描述（如 "v22.23.2（内置 …）" / "v20.13.1（系统 …）"）；未检查过为 null。</summary>
+    public string? ActiveNodeDescription { get; private set; }
+
     /// <summary>私有 npm 包当前安装的版本；未安装或元数据损坏时返回 null。</summary>
     public string? InstalledPackageVersion => ReadInstalledPackageVersion();
     public bool NeedsRuntimeUpdate => !string.Equals(InstalledPackageVersion, DshSharpCompatibility.DefaultDshVersion, StringComparison.Ordinal);
@@ -162,6 +194,38 @@ public sealed class DshServiceManager : IDisposable
     public Task<bool> RemovePluginAsync(string name, CancellationToken ct = default)
         => RunSerializedProfilePackageEditAsync(name, "remove", ct);
 
+    /// <summary>是否存在已激活的第三方（非随客户端发布）插件：故障页"安全模式重启"按钮的显示条件。</summary>
+    public bool HasThirdPartyPluginsActive => ListProfilePlugins().Any(p => p.IsActive && !p.IsBundled);
+
+    /// <summary>
+    /// 安全模式重启：停止托管进程 → 停用全部第三方插件激活（保留安装与内置插件，稍后可在设置页
+    /// 逐个重新启用）→ 正常走 StartAsync。故障场景下 dsh CLI 依赖同一 Runtime，因此直接原子改写
+    /// profile 清单而不是调用插件命令（官方桌面端同等场景同样绕过 CLI）。
+    /// </summary>
+    public async Task<bool> RestartInSafeModeAsync(CancellationToken ct = default)
+    {
+        await _profileEditLock.WaitAsync(ct);
+        bool rewritten;
+        try
+        {
+            Stop();
+            rewritten = DeactivateThirdPartyPlugins(GetWebProfileManifestPath());
+        }
+        finally
+        {
+            _profileEditLock.Release();
+        }
+
+        if (!rewritten)
+        {
+            LastError = WithLogTail("安全模式失败：无法改写插件配置（详见日志）");
+            return false;
+        }
+
+        AppendLog("--- safe mode restart: third-party bundles deactivated ---");
+        return await StartAsync(ct);
+    }
+
     /// <summary>托管进程意外退出时触发（服务崩溃）。</summary>
     public event EventHandler? ProcessExitedUnexpectedly;
 
@@ -178,15 +242,17 @@ public sealed class DshServiceManager : IDisposable
     /// 扫描常见端口，返回第一个响应 DSH/HTTP 服务的端口；
     /// 未发现返回 null。用于配置地址端口错误时的纠错提示。
     /// </summary>
+    /// <summary>探测复用客户端：就绪轮询 1 次/秒，逐次 new 会反复建拆连接（本地直连，不走代理）。</summary>
+    private static readonly HttpClient ProbeHttpClient = new(new SocketsHttpHandler { UseProxy = false })
+    {
+        Timeout = ProbeTimeout,
+    };
+
     private static async Task<bool> ProbeAsync(Uri uri, CancellationToken ct = default)
     {
         try
         {
-            using var http = new HttpClient(new SocketsHttpHandler { UseProxy = false })
-            {
-                Timeout = ProbeTimeout,
-            };
-            using var response = await http.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, ct);
+            using var response = await ProbeHttpClient.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, ct);
             return true;
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or OperationCanceledException)
@@ -224,6 +290,11 @@ public sealed class DshServiceManager : IDisposable
 
             RecoverRuntimeUpdate();
             Directory.CreateDirectory(_dshHomeDirectory);
+            if (!await EnsureNodeEnvironmentAsync(ct))
+            {
+                return false;
+            }
+
             if (!await EnsurePrivatePackageAsync(forceUpdate: false, ct) ||
                 !await EnsureBundledPluginsAsync(ct))
             {
@@ -838,7 +909,7 @@ public sealed class DshServiceManager : IDisposable
     {
         var privateStartInfo = new ProcessStartInfo
         {
-            FileName = "node",
+            FileName = NodeExecutable,
             WorkingDirectory = _packageDirectory,
             UseShellExecute = false,
             CreateNoWindow = true,
@@ -853,6 +924,7 @@ public sealed class DshServiceManager : IDisposable
         privateStartInfo.ArgumentList.Add("--port");
         privateStartInfo.ArgumentList.Add(port.ToString());
         ApplyPrivateEnvironment(privateStartInfo);
+        ConfigureRuntimePath(privateStartInfo);
 
         return privateStartInfo;
     }
@@ -860,15 +932,85 @@ public sealed class DshServiceManager : IDisposable
     private void ApplyPrivateEnvironment(ProcessStartInfo startInfo) =>
         startInfo.Environment["DSH_HOME"] = _dshHomeDirectory;
 
-    private void ConfigurePrivatePnpmPath(ProcessStartInfo startInfo)
+    /// <summary>启动 node 用的可执行文件：内置 Node 激活时给完整路径（Windows 上 CreateProcess
+    /// 按父进程 PATH 解析 FileName，改子进程环境对 FileName 解析无效），否则交给 PATH 解析。</summary>
+    private string NodeExecutable => _managedNodeExe ?? "node";
+
+    private string? ManagedNodeDirectory => _managedNodeExe is null ? null : Path.GetDirectoryName(_managedNodeExe);
+
+    /// <summary>为安装/运行的全部子进程统一注入 PATH：内置 Node 目录最前（npm.cmd 与 DSH 派生的
+    /// 孙进程都解析到同一个 Node，避免主/子进程 Node 版本混用），其次私有 pnpm 与包 bin，最后继承宿主 PATH。</summary>
+    private static void ConfigureRuntimePath(
+        ProcessStartInfo startInfo, string runtimeDirectory, string toolsDirectory, string? managedNodeDirectory)
     {
-        var privateToolsBin = Path.Combine(_packageToolsDirectory, "node_modules", ".bin");
-        var privatePackageBin = Path.Combine(_packageDirectory, "node_modules", ".bin");
-        startInfo.Environment["PATH"] = string.Join(
-            Path.PathSeparator,
-            privateToolsBin,
-            privatePackageBin,
-            Environment.GetEnvironmentVariable("PATH") ?? string.Empty);
+        var segments = new List<string>();
+        if (managedNodeDirectory is not null)
+        {
+            segments.Add(managedNodeDirectory);
+        }
+
+        segments.Add(Path.Combine(toolsDirectory, "node_modules", ".bin"));
+        segments.Add(Path.Combine(runtimeDirectory, "node_modules", ".bin"));
+        segments.Add(Environment.GetEnvironmentVariable("PATH") ?? string.Empty);
+        startInfo.Environment["PATH"] = string.Join(Path.PathSeparator, segments);
+    }
+
+    private void ConfigureRuntimePath(ProcessStartInfo startInfo) =>
+        ConfigureRuntimePath(startInfo, _packageDirectory, _packageToolsDirectory, ManagedNodeDirectory);
+
+    /// <summary>
+    /// 启动前环境预检：内置 Node 已安装且可执行 → 始终优先（不随系统 Node 变化漂移）；
+    /// 否则要求系统 Node 满足 <see cref="MinimumNodeVersion"/> 且 npm 可解析；仍不达标时
+    /// 自动下载内置 Node 兜底（只作为子进程叠加层，不改动用户系统）。失败时置 LastError 并返回 false。
+    /// </summary>
+    private async Task<bool> EnsureNodeEnvironmentAsync(CancellationToken ct)
+    {
+        if (_nodeRuntime.IsInstalled &&
+            await NodeEnvironment.RunNodeVersionAsync(_nodeRuntime.NodeExePath, ct) is { } managedVersion)
+        {
+            _managedNodeExe = _nodeRuntime.NodeExePath;
+            ActiveNodeDescription = $"{managedVersion}（内置 {_nodeRuntime.NodeDirectory}）";
+            return true;
+        }
+
+        if (_nodeRuntime.IsInstalled)
+        {
+            // 标记有效但 node.exe 无法执行（杀软/损坏）：作废标记，让下面的 EnsureAsync 重新下载。
+            _nodeRuntime.Invalidate();
+            Log?.Invoke("managed node marked invalid (probe failed); will re-download");
+        }
+
+        var nodePath = NodeEnvironment.ResolveOnPath("node");
+        var nodeVersion = nodePath is null ? null : await NodeEnvironment.RunNodeVersionAsync(nodePath, ct);
+        if (nodeVersion is not null &&
+            NodeEnvironment.IsNodeVersionSupported(nodeVersion, MinimumNodeVersion) &&
+            NodeEnvironment.ResolveOnPath("npm") is not null)
+        {
+            _managedNodeExe = null;
+            ActiveNodeDescription = $"{nodeVersion}（系统 {nodePath}）";
+            return true;
+        }
+
+        AppendLog("--- system node unusable, preparing managed node runtime ---");
+        if (await _nodeRuntime.EnsureAsync(ct) &&
+            await NodeEnvironment.RunNodeVersionAsync(_nodeRuntime.NodeExePath, ct) is { } repairedVersion)
+        {
+            _managedNodeExe = _nodeRuntime.NodeExePath;
+            ActiveNodeDescription = $"{repairedVersion}（内置 {_nodeRuntime.NodeDirectory}）";
+            return true;
+        }
+
+        var reason = nodePath is null
+            ? "未在 PATH 上检测到 Node.js"
+            : nodeVersion is null
+                ? $"Node 无法执行（{nodePath}）"
+                : !NodeEnvironment.IsNodeVersionSupported(nodeVersion, MinimumNodeVersion)
+                    ? $"检测到 Node {nodeVersion}（{nodePath}），DSH 运行时需要 Node ≥ {MinimumNodeVersion}"
+                    : "未检测到 npm（Node 安装不完整）";
+        ActiveNodeDescription = nodeVersion is null ? reason : $"{nodeVersion}（系统 {nodePath}，不达标）";
+        LastError = WithLogTail(
+            $"环境检查未通过：{reason}；自动下载内置 Node 失败：{_nodeRuntime.State.Error ?? "未知原因"}，请检查网络后重试");
+        return false;
     }
 
     /// <summary>首次运行通过私有 pnpm 安装 latest 并固定版本；后续启动复用该版本。</summary>
@@ -878,7 +1020,16 @@ public sealed class DshServiceManager : IDisposable
             File.Exists(PrivateDshEntryPath) && File.Exists(PrivatePnpmEntryPath) &&
             ReadInstalledPackageVersion() is not null)
         {
-            return true;
+            if (VerifyRuntimeIntegrity(_packageDirectory))
+            {
+                return true;
+            }
+
+            // 完整性自检失败（典型：杀软改写/截断关键文件，接上内置 Node 的 node -v 探测同一条防线）：
+            // 清掉依赖布局与标记，走完整重装自愈。
+            AppendLog("--- runtime integrity check failed; reinstalling ---");
+            TryDeleteDirectory(Path.Combine(_packageDirectory, "node_modules"));
+            TryDeleteFile(RuntimeLayoutMarkerPath(_packageDirectory));
         }
 
         // 普通启动和布局迁移必须保留用户当前的 DSH 版本；只有显式更新操作
@@ -914,7 +1065,9 @@ public sealed class DshServiceManager : IDisposable
                     return false;
                 }
                 AppendLog("bootstrapping private pnpm");
-                var bootstrapExitCode = await RunInstallProcessAsync(BuildPnpmBootstrapStartInfo(), ct);
+                var bootstrapExitCode = await RunInstallWithAdaptiveRegistryAsync(
+                    useMirror => BuildPnpmBootstrapStartInfo(useRegistryMirror: useMirror), ct);
+
                 if (bootstrapExitCode != 0 || !File.Exists(PrivatePnpmEntryPath))
                 {
                     LastError = WithLogTail($"私有 pnpm 安装失败（npm 退出码 {bootstrapExitCode}）");
@@ -929,7 +1082,9 @@ public sealed class DshServiceManager : IDisposable
                 TryDeleteDirectory(Path.Combine(_packageDirectory, "node_modules"));
             }
             AppendLog(forceUpdate ? "updating DSH with private pnpm" : "installing DSH with private pnpm");
-            var installExitCode = await RunInstallProcessAsync(BuildDshInstallStartInfo(versionToInstall), ct);
+            var installExitCode = await RunInstallWithAdaptiveRegistryAsync(
+                useMirror => BuildDshInstallStartInfo(versionToInstall, useRegistryMirror: useMirror), ct);
+
             if (installExitCode != 0 || !File.Exists(PrivateDshEntryPath))
             {
                 LastError = WithLogTail($"DSH 官方包安装失败（pnpm 退出码 {installExitCode}）");
@@ -938,6 +1093,7 @@ public sealed class DshServiceManager : IDisposable
 
             var version = ReadInstalledPackageVersion();
             File.WriteAllText(RuntimeLayoutMarkerPath(_packageDirectory), "3\n", new UTF8Encoding(false));
+            WriteRuntimeIntegrityManifest(_packageDirectory);
             LastError = null;
             Log?.Invoke($"private DSH package ready, version={version ?? "unknown"}");
             return true;
@@ -972,7 +1128,10 @@ public sealed class DshServiceManager : IDisposable
                     LastError = WithLogTail("无法替换暂存 Runtime 的私有 pnpm");
                     return false;
                 }
-                if (await RunInstallProcessAsync(BuildPnpmBootstrapStartInfo(toolsDirectory), ct) != 0 || !File.Exists(pnpmEntry))
+                var bootstrapExitCode = await RunInstallWithAdaptiveRegistryAsync(
+                    useMirror => BuildPnpmBootstrapStartInfo(runtimeDirectory, toolsDirectory, useRegistryMirror: useMirror), ct);
+
+                if (bootstrapExitCode != 0 || !File.Exists(pnpmEntry))
                 {
                     LastError = WithLogTail("私有 pnpm 安装失败");
                     return false;
@@ -980,7 +1139,10 @@ public sealed class DshServiceManager : IDisposable
             }
 
             WritePrivatePnpmWorkspaceConfig(runtimeDirectory);
-            if (await RunInstallProcessAsync(BuildDshInstallStartInfo(runtimeDirectory, toolsDirectory, targetVersion), ct) != 0 ||
+            var installExitCode = await RunInstallWithAdaptiveRegistryAsync(
+                useMirror => BuildDshInstallStartInfo(runtimeDirectory, toolsDirectory, targetVersion, useRegistryMirror: useMirror), ct);
+
+            if (installExitCode != 0 ||
                 !IsRuntimeDirectoryComplete(runtimeDirectory))
             {
                 LastError = WithLogTail("DSH 官方包安装失败或 Runtime 不完整");
@@ -988,6 +1150,7 @@ public sealed class DshServiceManager : IDisposable
             }
 
             File.WriteAllText(RuntimeLayoutMarkerPath(runtimeDirectory), "3\n", new UTF8Encoding(false));
+            WriteRuntimeIntegrityManifest(runtimeDirectory);
             return true;
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or IOException)
@@ -1005,7 +1168,7 @@ public sealed class DshServiceManager : IDisposable
     {
         var startInfo = new ProcessStartInfo
         {
-            FileName = "node",
+            FileName = NodeExecutable,
             WorkingDirectory = _packageDirectory,
             UseShellExecute = false,
             CreateNoWindow = true,
@@ -1015,7 +1178,7 @@ public sealed class DshServiceManager : IDisposable
             StandardErrorEncoding = Encoding.UTF8,
         };
         ApplyPrivateEnvironment(startInfo);
-        ConfigurePrivatePnpmPath(startInfo);
+        ConfigureRuntimePath(startInfo);
         startInfo.ArgumentList.Add(EnsureCliEntryWrapper());
         foreach (var arg in args)
         {
@@ -1162,6 +1325,51 @@ public sealed class DshServiceManager : IDisposable
     private string GetWebProfileManifestPath() =>
         Path.Combine(_dshHomeDirectory, "profiles", "web", "package.json");
 
+    /// <summary>改写 profile 清单：从 <c>dsh.profile.bundles</c> 移除全部第三方条目（保留内置插件，
+    /// 依赖安装不动，只取消激活）。改写前留 <c>.dshsharp-safe-mode.bak</c> 备份。
+    /// 清单缺失或没有第三方激活项时返回 true（幂等）。</summary>
+    internal static bool DeactivateThirdPartyPlugins(string manifestPath)
+    {
+        try
+        {
+            if (!File.Exists(manifestPath))
+            {
+                return true;
+            }
+
+            var root = JsonNode.Parse(File.ReadAllText(manifestPath));
+            var bundles = root?["dsh"]?["profile"]?["bundles"];
+            if (bundles is not JsonArray array || array.Count == 0)
+            {
+                return true;
+            }
+
+            var kept = array
+                .Select(node => node?.GetValue<string>())
+                .Where(name => string.Equals(name, BundledSessionPackage, StringComparison.Ordinal))
+                .OfType<string>()
+                .ToList();
+            if (kept.Count == array.Count)
+            {
+                return true; // 没有第三方激活项：无需改写。
+            }
+
+            File.Copy(manifestPath, manifestPath + ".dshsharp-safe-mode.bak", overwrite: true);
+            root!["dsh"]!["profile"]!["bundles"] = new JsonArray(
+                kept.Select(name => JsonValue.Create(name)).ToArray());
+            File.WriteAllText(
+                manifestPath,
+                root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }),
+                new UTF8Encoding(false));
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            Log?.Invoke($"safe mode manifest rewrite failed: {ex.Message}");
+            return false;
+        }
+    }
+
     private static string? ReadPluginVersion(string profileManifest, string name)
     {
         var packagePath = Path.Combine(Path.GetDirectoryName(profileManifest) ?? string.Empty, "node_modules", name, "package.json");
@@ -1248,11 +1456,11 @@ public sealed class DshServiceManager : IDisposable
 
         var startInfo = new ProcessStartInfo
         {
-            FileName = "node", WorkingDirectory = Path.GetDirectoryName(profileManifest), UseShellExecute = false,
+            FileName = NodeExecutable, WorkingDirectory = Path.GetDirectoryName(profileManifest), UseShellExecute = false,
             CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true,
         };
         ApplyPrivateEnvironment(startInfo);
-        ConfigurePrivatePnpmPath(startInfo);
+        ConfigureRuntimePath(startInfo);
         startInfo.ArgumentList.Add(EnsureCliEntryWrapper()); startInfo.ArgumentList.Add("plugin");
         startInfo.ArgumentList.Add("--profile"); startInfo.ArgumentList.Add("web"); startInfo.ArgumentList.Add("remove"); startInfo.ArgumentList.Add(name);
         try
@@ -1299,7 +1507,7 @@ public sealed class DshServiceManager : IDisposable
 
         var startInfo = new ProcessStartInfo
         {
-            FileName = "node",
+            FileName = NodeExecutable,
             WorkingDirectory = _packageDirectory,
             UseShellExecute = false,
             CreateNoWindow = true,
@@ -1307,6 +1515,7 @@ public sealed class DshServiceManager : IDisposable
             RedirectStandardError = true,
         };
         ApplyPrivateEnvironment(startInfo);
+        ConfigureRuntimePath(startInfo);
         startInfo.ArgumentList.Add(EnsureCliEntryWrapper());
         startInfo.ArgumentList.Add("--profile");
         startInfo.ArgumentList.Add("web");
@@ -1449,6 +1658,86 @@ public sealed class DshServiceManager : IDisposable
     private static string RuntimeLayoutMarkerPath(string runtimeDirectory) =>
         Path.Combine(runtimeDirectory, ".dshsharp-runtime-layout-v2");
 
+    /// <summary>完整性清单文件名（位于 Runtime 根目录，随目录交换一起迁移）。</summary>
+    internal const string IntegrityManifestFileName = ".dshsharp-integrity.json";
+
+    /// <summary>启动关键文件（损坏即无法启动/安装）：DSH 入口、包元数据、私有 pnpm 入口。</summary>
+    private static readonly string[] IntegrityTrackedFiles =
+    [
+        Path.Combine("node_modules", "@deepseek-ai", "dsh", "lib", "bin.js"),
+        Path.Combine("node_modules", "@deepseek-ai", "dsh", "package.json"),
+        Path.Combine(".tools", "node_modules", "pnpm", "bin", "pnpm.cjs"),
+    ];
+
+    /// <summary>安装成功后写入关键文件 SHA256 清单（失败仅记日志，不阻塞安装）。</summary>
+    private static void WriteRuntimeIntegrityManifest(string runtimeDirectory)
+    {
+        try
+        {
+            var manifest = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var relative in IntegrityTrackedFiles)
+            {
+                var path = Path.Combine(runtimeDirectory, relative);
+                if (File.Exists(path))
+                {
+                    manifest[relative.Replace('\\', '/')] = HashFile(path);
+                }
+            }
+
+            File.WriteAllText(
+                Path.Combine(runtimeDirectory, IntegrityManifestFileName),
+                JsonSerializer.Serialize(manifest),
+                new UTF8Encoding(false));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Log?.Invoke($"integrity manifest write failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>启动时校验关键文件哈希。清单缺失（旧安装/暂存迁移中）视为通过；
+    /// 任一登记文件缺失或哈希不符（杀软改写/截断）即失败，调用方走重装自愈。</summary>
+    internal static bool VerifyRuntimeIntegrity(string runtimeDirectory)
+    {
+        try
+        {
+            var manifestPath = Path.Combine(runtimeDirectory, IntegrityManifestFileName);
+            if (!File.Exists(manifestPath))
+            {
+                return true;
+            }
+
+            var manifest = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(manifestPath));
+            if (manifest is null || manifest.Count == 0)
+            {
+                return true;
+            }
+
+            foreach (var (relative, expected) in manifest)
+            {
+                var path = Path.Combine(runtimeDirectory, relative.Replace('/', Path.DirectorySeparatorChar));
+                if (!File.Exists(path) || HashFile(path) != expected)
+                {
+                    Log?.Invoke($"runtime integrity mismatch: {relative}");
+                    return false;
+                }
+            }
+
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
+        {
+            // 清单读不了：不凭空判定损坏，放行（安装流程的常规校验仍会兜底）。
+            return true;
+        }
+    }
+
+    private static string HashFile(string path)
+    {
+        using var stream = File.OpenRead(path);
+        return Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(stream));
+    }
+
     private static bool HasCurrentRuntimeLayout(string runtimeDirectory)
     {
         try
@@ -1484,10 +1773,10 @@ public sealed class DshServiceManager : IDisposable
 
     private static string CommandName(string name) => OperatingSystem.IsWindows() ? $"{name}.cmd" : name;
 
-    private ProcessStartInfo BuildPnpmBootstrapStartInfo()
-        => BuildPnpmBootstrapStartInfo(_packageToolsDirectory);
+    private ProcessStartInfo BuildPnpmBootstrapStartInfo(bool useRegistryMirror = false)
+        => BuildPnpmBootstrapStartInfo(_packageDirectory, _packageToolsDirectory, useRegistryMirror);
 
-    private ProcessStartInfo BuildPnpmBootstrapStartInfo(string toolsDirectory)
+    private ProcessStartInfo BuildPnpmBootstrapStartInfo(string runtimeDirectory, string toolsDirectory, bool useRegistryMirror = false)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -1500,6 +1789,14 @@ public sealed class DshServiceManager : IDisposable
             RedirectStandardOutput = true,
             RedirectStandardError = true,
         };
+        // cmd 从子进程自身 PATH 解析 npm：内置 Node 激活时其目录排在最前，
+        // npm.cmd 与其内部 node 均来自内置 Node（系统 npm 的 shim 不会被选中）。
+        ConfigureRuntimePath(startInfo, runtimeDirectory, toolsDirectory, ManagedNodeDirectory);
+        if (useRegistryMirror)
+        {
+            startInfo.Environment["npm_config_registry"] = RegistryMirrorUrl;
+        }
+
         if (OperatingSystem.IsWindows())
         {
             startInfo.ArgumentList.Add("/d");
@@ -1518,20 +1815,26 @@ public sealed class DshServiceManager : IDisposable
         return startInfo;
     }
 
-    private ProcessStartInfo BuildDshInstallStartInfo(string? targetVersion = null)
-        => BuildDshInstallStartInfo(_packageDirectory, _packageToolsDirectory, targetVersion);
+    private ProcessStartInfo BuildDshInstallStartInfo(string? targetVersion = null, bool useRegistryMirror = false)
+        => BuildDshInstallStartInfo(_packageDirectory, _packageToolsDirectory, targetVersion, useRegistryMirror);
 
-    private ProcessStartInfo BuildDshInstallStartInfo(string runtimeDirectory, string toolsDirectory, string? targetVersion = null)
+    private ProcessStartInfo BuildDshInstallStartInfo(string runtimeDirectory, string toolsDirectory, string? targetVersion = null, bool useRegistryMirror = false)
     {
         var startInfo = new ProcessStartInfo
         {
-            FileName = "node",
+            FileName = NodeExecutable,
             WorkingDirectory = runtimeDirectory,
             UseShellExecute = false,
             CreateNoWindow = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
         };
+        ConfigureRuntimePath(startInfo, runtimeDirectory, toolsDirectory, ManagedNodeDirectory);
+        if (useRegistryMirror)
+        {
+            startInfo.Environment["npm_config_registry"] = RegistryMirrorUrl;
+        }
+
         startInfo.ArgumentList.Add(Path.Combine(toolsDirectory, "node_modules", "pnpm", "bin", "pnpm.cjs"));
         startInfo.ArgumentList.Add("add");
         startInfo.ArgumentList.Add("--save-exact");
@@ -1645,7 +1948,143 @@ public sealed class DshServiceManager : IDisposable
         }
     }
 
-    /// <summary>失败诊断：附带服务日志尾部，帮助用户定位（依赖/构建/配置等问题）。</summary>
+    /// <summary>判定文本是否呈网络类失败特征（镜像重试的触发条件）。</summary>
+    internal static bool LooksLikeNetworkFailure(string text) =>
+        NetworkFailureTokens.Any(token => text.Contains(token, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>判定是否呈 registry 同步滞后特征：ERESOLVE 叠加网络失败（如 fetch failed）。
+    /// 上游发版后镜像元数据同步窗口内，官方源不可达 + 镜像解析失败同时出现——
+    /// 隔一段时间重试即可通过（实测 0.1.7-rc.1 发版后 ~1.5h 出现、次日自愈）。</summary>
+    internal static bool LooksLikeRegistrySyncLag(string text) =>
+        text.Contains("ERESOLVE", StringComparison.Ordinal) && LooksLikeNetworkFailure(text);
+
+    /// <summary>镜像偏好标记：镜像重试成功后持久化，之后所有安装直走镜像（跳过注定失败的首试超时）；
+    /// 镜像失败而官方源成功时清除——网络环境变化（装了代理/换了网络）自动回到默认顺序。</summary>
+    internal static bool IsRegistryMirrorPreferred(string markerPath) => File.Exists(markerPath);
+
+    internal static void SetRegistryMirrorPreference(string markerPath)
+    {
+        try
+        {
+            File.WriteAllText(markerPath, "npmmirror preferred after official registry failure\n");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Log?.Invoke($"registry mirror marker write failed: {ex.Message}");
+        }
+    }
+
+    internal static void ClearRegistryMirrorPreference(string markerPath)
+    {
+        try
+        {
+            if (File.Exists(markerPath))
+            {
+                File.Delete(markerPath);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Log?.Invoke($"registry mirror marker delete failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 带镜像自适应的安装执行：按上次成功经验选择首发源（标记存在 → 镜像优先）；
+    /// 首试失败且呈网络特征时换另一个源重试，并按结果更新偏好标记。
+    /// 返回最终退出码；"安装是否成功"仍由调用方按退出码 + 期望文件综合判定。
+    /// </summary>
+    private async Task<int> RunInstallWithAdaptiveRegistryAsync(
+        Func<bool, ProcessStartInfo> buildStartInfo, CancellationToken ct)
+    {
+        var preferMirror = IsRegistryMirrorPreferred(_registryMirrorMarkerPath);
+        var first = await RunInstallProcessAsync(buildStartInfo(preferMirror), ct);
+        if (first == 0)
+        {
+            return first;
+        }
+
+        if (!RecentLogLooksLikeNetworkFailure())
+        {
+            return first; // 非网络失败：换源无意义，原样上报。
+        }
+
+        AppendLog(preferMirror
+            ? "--- registry mirror failed with network symptoms; retrying via official registry ---"
+            : "--- retrying via registry mirror ---");
+        var second = await RunInstallProcessAsync(buildStartInfo(!preferMirror), ct);
+        if (second == 0)
+        {
+            if (preferMirror)
+            {
+                ClearRegistryMirrorPreference(_registryMirrorMarkerPath);
+            }
+            else
+            {
+                SetRegistryMirrorPreference(_registryMirrorMarkerPath);
+            }
+
+            return second;
+        }
+
+        // 双源皆败且呈同步滞后特征：多半撞上上游发版窗口（官方源不可达 + 镜像元数据未齐），
+        // 等 60 秒让镜像追平后再试一次，通常即可通过。
+        if (LooksLikeRegistrySyncLag(ReadRecentLogTail()))
+        {
+            AppendLog("--- registry sync lag detected (ERESOLVE + fetch failure); retrying in 60s ---");
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(60), ct);
+            }
+            catch (OperationCanceledException)
+            {
+                return second;
+            }
+
+            return await RunInstallProcessAsync(buildStartInfo(!preferMirror), ct);
+        }
+
+        return second;
+    }
+
+    /// <summary>读取服务日志尾部文本（同步滞后判定窗口，同失败分类口径）。</summary>
+    private string ReadRecentLogTail()
+    {
+        try
+        {
+            if (!File.Exists(_logPath))
+            {
+                return string.Empty;
+            }
+
+            return string.Join(Environment.NewLine, File.ReadLines(_logPath).TakeLast(40));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return string.Empty;
+        }
+    }
+
+    /// <summary>服务日志尾部是否呈网络类失败特征（重试窗口覆盖最近 60 行）。</summary>
+    private bool RecentLogLooksLikeNetworkFailure()
+    {
+        try
+        {
+            if (!File.Exists(_logPath))
+            {
+                return false;
+            }
+
+            return File.ReadLines(_logPath).TakeLast(60).Any(LooksLikeNetworkFailure);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>失败诊断：附带服务日志尾部，帮助用户定位（依赖/构建/配置等问题）；
+    /// 能识别的失败信号额外附加人话提示（见 <see cref="ClassifyFailureHint"/>）。</summary>
     private string WithLogTail(string message)
     {
         try
@@ -1655,20 +2094,51 @@ public sealed class DshServiceManager : IDisposable
                 return message;
             }
 
-            var tail = File.ReadLines(_logPath)
-                .Where(l => !string.IsNullOrWhiteSpace(l))
-                .TakeLast(6)
+            var lines = File.ReadLines(_logPath).Where(l => !string.IsNullOrWhiteSpace(l)).ToArray();
+            var tail = lines.TakeLast(6)
                 .Select(l => l.Length > 180 ? l[..180] + "…" : l)
                 .ToArray();
+            // 分类窗口比展示窗口宽：网络类报错常在更多输出之前。
+            var hint = ClassifyFailureHint(string.Join("\n", lines.TakeLast(40)));
+            var hintSuffix = hint is null ? string.Empty : $"\n（{hint}）";
             return tail.Length > 0
-                ? $"{message}\n最近日志：\n{string.Join("\n", tail)}"
-                : message;
+                ? $"{message}{hintSuffix}\n最近日志：\n{string.Join("\n", tail)}"
+                : message + hintSuffix;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             // 日志读取失败不影响诊断主体。
             return message;
         }
+    }
+
+    /// <summary>把常见失败信号翻译成可操作的提示（借鉴官方桌面端的失败分类：端口占用给
+    /// "退出其他实例"而不是诊断天书）。按特异性排序取第一个命中，未命中返回 null。</summary>
+    internal static string? ClassifyFailureHint(string logText)
+    {
+        if (logText.Contains("EADDRINUSE", StringComparison.Ordinal))
+        {
+            return "端口被占用：可能有另一个 DSH 实例正在运行。请退出其他 DSH/DSH-Sharp 程序后重试启动";
+        }
+
+        if (logText.Contains("ENOSPC", StringComparison.Ordinal) ||
+            logText.Contains("insufficient disk space", StringComparison.OrdinalIgnoreCase))
+        {
+            return "磁盘空间不足：请清理 %APPDATA%\\DSHSharp 所在磁盘后重试";
+        }
+
+        if (logText.Contains("ERR_UNKNOWN_BUILTIN_MODULE", StringComparison.Ordinal) ||
+            logText.Contains("EBADENGINE", StringComparison.Ordinal))
+        {
+            return $"Node 版本低于私有 pnpm 的要求（≥ {MinimumNodeVersion}）：升级系统 Node，或重启客户端让环境预检自动下载内置 Node";
+        }
+
+        if (LooksLikeNetworkFailure(logText))
+        {
+            return "日志呈网络失败特征：请检查网络/代理后重试（客户端已自动尝试镜像链路）";
+        }
+
+        return null;
     }
 
     private void PumpOutput(Process process)
@@ -1722,17 +2192,54 @@ public sealed class DshServiceManager : IDisposable
         return Uri.TryCreate(value, UriKind.Absolute, out uri!) && uri.Scheme is "http" or "https";
     }
 
+    /// <summary>服务日志大小上限（2MB）：超过后轮转为 .old 保留一代，常驻运行不会无限增长
+    /// （官方桌面端对 Host 诊断同样只保留尾部 64Ki 的纪律）。app.log 复用同一上限。</summary>
+    public const long MaxServiceLogBytes = 2 * 1024 * 1024;
+
+    /// <summary>超过上限时把日志轮转为 <c>&lt;logPath&gt;.old</c>（覆盖上一代）。轮转失败静默：
+    /// 日志写入不受影响，下次追加再试。</summary>
+    public static void RotateLogFile(string logPath, long maxBytes)
+    {
+        try
+        {
+            var info = new FileInfo(logPath);
+            if (!info.Exists || info.Length < maxBytes)
+            {
+                return;
+            }
+
+            var rotated = logPath + ".old";
+            if (File.Exists(rotated))
+            {
+                File.Delete(rotated);
+            }
+
+            info.MoveTo(rotated);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // 轮转失败不影响写日志。
+        }
+    }
+
+    // stdout/stderr 两个 pump 任务与启动流程并发写日志：不加锁会在 FileShare.None 上撞 IOException 丢行。
+    private readonly object _logWriteLock = new();
+
     private void AppendLog(string line)
     {
         try
         {
-            var directory = Path.GetDirectoryName(_logPath);
-            if (!string.IsNullOrEmpty(directory))
+            lock (_logWriteLock)
             {
-                Directory.CreateDirectory(directory);
-            }
+                var directory = Path.GetDirectoryName(_logPath);
+                if (!string.IsNullOrEmpty(directory))
+                {
+                    Directory.CreateDirectory(directory);
+                }
 
-            File.AppendAllText(_logPath, $"[{DateTime.Now:HH:mm:ss}] {line}{Environment.NewLine}");
+                RotateLogFile(_logPath, MaxServiceLogBytes);
+                File.AppendAllText(_logPath, $"[{DateTime.Now:HH:mm:ss}] {line}{Environment.NewLine}");
+            }
         }
         catch
         {

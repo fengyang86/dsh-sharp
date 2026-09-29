@@ -17,6 +17,38 @@
 - **`import.meta.main` 陷阱依旧**：Node 22.17 直跑 `lib/bin.js` 仍静默退出 0，runCli 包装器仍必需
 - **npm dist-tags**：`latest=0.1.5-rc.2`、`alpha=0.1.6-alpha.2`；`engines.node` 自 0.1.5-rc.1 起即为 `^22.19.0 || >=24`（仅警告不阻断）
 
+### 0.1.7-rc.1 实测补充（2026-09-24）
+
+- **发版窗口的 registry 瞬时故障**：0.1.7-rc.1 于 2026-09-23 21:44（北京时间）发布；约 1.5h 后
+  安装 0.1.7-alpha.2 出现「官方源 fetch failed + 镜像 ERESOLVE」叠加（npmmirror 对 rc.1 新包的
+  同步窗口）——次日双源实测均 9s 内装通。客户端已加同步滞后判定（ERESOLVE + 网络特征 → 60s 延迟重试）
+- **peer 兼容强制化不影响宿主插件**：rc.1 起 plugin-manager 强制校验插件声明的
+  `peerDependencies`（不兼容即类型化拒绝）；`@yangfeng/dsh-sharp-session` 无 peer 声明，
+  真机 `plugin --profile web add link:` 通过、无拒绝日志
+- **依赖集合与 alpha.2 完全一致**：无新增/移除直接依赖、无新增原生依赖（allowBuilds 不变）、
+  发布包仍无 engines
+- 七项实测全过：私有 pnpm 配方安装（14.6s）、`dsh web:` 就绪行格式、token→cookie（303）、
+  `session/list` 新信封（ok:true）、旧方法 404（回退路径）、`remote.mux` $events ready、插件链接
+- npm dist-tags：`latest=0.1.5-rc.3`（未验证，更新逻辑正确回退默认版本）、`next=0.1.7-rc.1`
+
+### 0.1.7-alpha.2 实测补充（2026-09-23）
+
+私有 pnpm 配方（pnpm 11.25 + hoisted + allowBuilds）安装、`dsh web` 启动、token→cookie 交换（303）、
+`session/list` 新信封（ok:true）、旧方法 404（客户端回退路径有效）、`/api/remote.mux` open $events → ready、
+`plugin --profile web add link:`（经 PATH 注入私有 pnpm）全部实测通过；无新增原生依赖（allowBuilds 不变）。
+
+- **发布包无 engines**：npm 上 `@deepseek-ai/dsh` 各版本（含 0.1.7-alpha.2）均不带 `engines` 字段。
+  0.1.6 小节所述 `^22.19.0 || >=24` 实为**源码仓根 package.json 的开发约束**，不对 npm 消费者生效——
+  客户端 Node 门槛仍由私有 pnpm 11.25 的 `>=22.13` 决定，内置 Node 22.23.2 覆盖两者
+- **plugin-manager 镜像选源**：0.1.7 起 plugin-manager 在 registry 不可达时自动尝试镜像
+  （`choose the first responsive public registry`、大陆网络优先镜像）——与客户端 npmmirror 兜底互补
+- **CLI 转发 pnpm 语义不变**：`dsh plugin` 仍把参数原样转给 PATH 中的 pnpm（CLI 模式继承 `process.env`），
+  私有 pnpm 的 PATH 注入仍是客户端插件安装的唯一供管路径
+- 新增依赖值得注意：`dsh-skill-office`（办公技能包）、`dsh-tool-workspace-dependencies`、
+  `dsh-experimental-voice-input-bundle`；移除 `dsh-experimental-agent-team-web-profile`
+- npm dist-tags：`latest=0.1.5-rc.2`、`next=0.1.5-rc.3`、`alpha=0.1.7-alpha.2`——
+  客户端"更新 Runtime"取 latest 标签，未验证的 0.1.5-rc.3 不会被自动选中（不在白名单）
+
 ### v0.3.0 开发期新发现（2026-09-19）
 
 - **`turn/end` 结局分类**（`packages/core/session/src/types.ts` 的 `TurnEndReasonMap`）：`completed` / `aborted`（用户取消，含 Esc）/ `blocked` / `error`（带结构化 `LlmFailure.message`）/ 输出 token 上限等插件可扩展变体；session/page 记录里位于 `event.data.reason`，是区分"完成/失败"通知的权威信号

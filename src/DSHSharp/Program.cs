@@ -31,6 +31,7 @@ internal static class Program
 
         App.AutoStartLaunch = args.Contains("--autostart", StringComparer.OrdinalIgnoreCase);
         App.PendingDeepLinkSession = ParseDeepLinkSession(args);
+        App.StartupStopwatch = Stopwatch.StartNew();
 
         singleInstance.StartListener(() =>
             Dispatcher.UIThread.Post(() => App.Instance?.ActivateMainWindow()));
@@ -89,78 +90,8 @@ internal static class Program
             }
         }
 
-        try
-        {
-            WriteLog($"installer started (installDir={installDir}, waitForPid={waitForPid})");
-            if (waitForPid > 0)
-            {
-                try
-                {
-                    using var old = Process.GetProcessById(waitForPid);
-                    if (!old.WaitForExit(20_000))
-                    {
-                        WriteLog("old instance still running after 20s, aborting");
-                        return 2;
-                    }
-                }
-                catch (ArgumentException)
-                {
-                    // 旧实例已退出。
-                }
-            }
-
-            var sourceDir = AppContext.BaseDirectory;
-            var stagedExe = Path.Combine(sourceDir, "DSHSharp.exe");
-            if (!File.Exists(stagedExe))
-            {
-                WriteLog($"staged DSHSharp.exe missing at {sourceDir}");
-                return 3;
-            }
-
-            Directory.CreateDirectory(installDir);
-            foreach (var source in Directory.EnumerateFiles(sourceDir, "*", SearchOption.AllDirectories))
-            {
-                var relative = Path.GetRelativePath(sourceDir, source);
-                var target = Path.Combine(installDir, relative);
-                var targetDir = Path.GetDirectoryName(target);
-                if (targetDir is not null)
-                {
-                    Directory.CreateDirectory(targetDir);
-                }
-
-                File.Copy(source, target, overwrite: true);
-            }
-
-            // WebView2 用户数据目录由旧安装产生、不应被 staging 里的空目录顶掉。
-            var userData = Path.Combine(installDir, "DSHSharp.exe.WebView2");
-            WriteLog($"copied update payload into {installDir}");
-
-            // 清理安装目录内的下载 staging（历史版本曾放在安装目录中）。
-            try
-            {
-                var legacyStaging = Path.Combine(installDir, "update-staging");
-                if (Directory.Exists(legacyStaging))
-                {
-                    Directory.Delete(legacyStaging, recursive: true);
-                }
-            }
-            catch (IOException)
-            {
-                // 清理失败不影响安装结果。
-            }
-
-            using (Process.Start(new ProcessStartInfo(Path.Combine(installDir, "DSHSharp.exe")) { UseShellExecute = true }))
-            {
-                WriteLog("new instance launched");
-            }
-
-            return 0;
-        }
-        catch (Exception ex)
-        {
-            WriteLog($"failed: {ex}");
-            return 1;
-        }
+        // 旁路暂存 + 目录改名交换：中途失败保留旧版本可回滚，不再直接逐文件覆盖安装目录。
+        return DSHSharp.Core.Services.UpdateInstaller.Run(AppContext.BaseDirectory, installDir, waitForPid, WriteLog);
     }
 
     // Avalonia configuration, don't remove; also used by visual designer.

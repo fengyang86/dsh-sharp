@@ -10,7 +10,7 @@
 > DSH-Sharp 的桌面体验优势仍在，因此恢复维护。
 >
 > - 仓库已重新开放，恢复提交与 CI
-> - 已验证兼容 DSH `0.1.6-alpha.2` 与 `0.1.5-rc.2`（完整验证清单见 [DshSharpCompatibility.cs](src/DSHSharp.Core/Compatibility/DshSharpCompatibility.cs)）
+> - 已验证兼容 DSH `0.1.7-rc.1`、`0.1.7-alpha.2` 与 `0.1.6-alpha.2`（完整验证清单见 [DshSharpCompatibility.cs](src/DSHSharp.Core/Compatibility/DshSharpCompatibility.cs)）
 >
 > 📄 **DSH 协议与运维笔记见 [ARCHIVE-NOTES.md](ARCHIVE-NOTES.md)** — 开发过程中逆推并实测的认证（token→cookie）、HTTP RPC、`remote.mux` 事件流、插件 API、CLI 启动陷阱等内容集中留档
 
@@ -20,7 +20,7 @@
 ## 功能全景
 
 ### 核心壳能力
-- **内嵌 DSH WebUI**：`NativeWebView` 承载（WebView2），私有 Runtime 就绪后自动加载
+- **内嵌 DSH WebUI**：`NativeWebView` 承载（WebView2），私有 Runtime 就绪后自动加载；启动期显示品牌过场动画（呼吸点 + 渐隐过渡），正常启动不再出现『正在准备』工程页
 - **自定义标题栏**：拖动/双击最大化/最小化最大化关闭（图标随状态切换）、窗口边缘拉伸、位置大小记忆
 - **系统托盘**：最小化到托盘、动态菜单（显示主窗口 / 设置 / 新建会话 / 私有 Runtime 最近会话（含"打开所在目录"）/ Runtime 启停 / 关于 / 退出）；悬停 tooltip 显示版本、运行中会话数与 Runtime 地址；不展示或接管外部 DSH 服务
 - **单实例**：重复启动自动唤起已有窗口
@@ -34,7 +34,8 @@
   - 私有 `DSH_HOME`：会话、插件、设置和凭据位于 `%APPDATA%/DSHSharp/dsh-home`，不与命令行 DSH 混用
   - 首选 3080；端口被占用时自动选择备用本机端口，并在运行时详情显示实际地址
   - 孤儿清理：pid 文件 + 进程命令行兜底扫描，客户端异常退出遗留的私有 Runtime 在下次启动时自动回收（外部 DSH 进程不受影响）
-  - 失败诊断：Runtime 启动页显示重试与服务日志尾部（`dsh-service.log`）
+  - 失败诊断：Runtime 启动页显示重试与服务日志尾部（`dsh-service.log`，2MB 自动轮转）；端口占用/磁盘不足/网络失败/Node 版本等常见信号自动翻译为可操作提示
+  - **安全模式重启**：启动失败且存在已激活第三方插件时，故障页出现"安全模式重启"——停用全部第三方插件（保留安装与内置插件）后重启，稍后可在设置页逐个重新启用
 - **自启动**：注册 HKCU Run 键，`--autostart` 静默驻留托盘
 
 ### 客户端自更新
@@ -67,6 +68,15 @@
 - **Windows 安装程序**：`DSHSharp-Setup-<版本>.exe`，中文向导、每用户安装免 UAC、桌面图标可选、控制面板可卸载（保留会话数据并提示位置）；升级直接覆盖安装
 - **绿色版**：win-x64 / linux-x64 自包含 zip；自更新通道走 zip
 
+### 环境要求与自动修复
+- **Node.js ≥ 22.13**：客户端通过私有 pnpm（pnpm 11.x，要求 `node >= 22.13`）安装 DSH Runtime；系统 Node 低于该版本时会在启动时崩溃（`ERR_UNKNOWN_BUILTIN_MODULE`）
+- **WebView2 运行时**（Windows）：Win10/11 一般自带；缺失时（LTSC/精简系统）自动下载微软官方 Evergreen 安装器（Authenticode 签名校验后静默安装，未提升权限走 per-user 免 UAC），与 Node 修复共用启动引导页显示进度
+- **首装网络兜底与自适应镜像**：registry.npmjs.org 直连失败且日志呈网络特征时自动注入 npmmirror 镜像重试；镜像成功后持久化偏好（`.registry-mirror-preferred`），之后所有安装直走镜像，跳过注定失败的首试超时；镜像失败而官方源成功时自动清除偏好（网络环境变化自愈）。默认 registry 不变，避免镜像同步滞后拿到旧版本
+- **无需手动处理**：每次启动前做统一环境预检——系统 Node 缺失/版本不足/npm 缺失时，自动下载内置 Node（nodejs.org 官方包，npmmirror 镜像兜底，SHA256 校验、断点续传，约 30MB，进度显示在启动页）并仅对本客户端的子进程生效，不改动系统 Node；下载失败时给出明确报错，网络恢复后点"重试启动"续传
+- 内置 Node 安装后始终优先使用（不随系统 Node 变化漂移），位于 `%APPDATA%/DSHSharp/node-runtime/`，卸载客户端随目录清除
+
+NativeAOT 部署的可行性与路线见 [docs/aot-assessment.md](docs/aot-assessment.md)。
+
 ## 技术栈
 
 | 组件 | 版本 |
@@ -75,7 +85,7 @@
 | Avalonia | 12.1（Fluent 主题，`WindowDecorations` 自绘标题栏） |
 | 内嵌 WebView | [Avalonia.Controls.WebView](https://www.nuget.org/packages/Avalonia.Controls.WebView) 12.1（WebView2 / WebKit / WebKitGTK） |
 | MVVM | CommunityToolkit.Mvvm |
-| 单元测试 | xUnit（89 项）+ Vitest（20 项） |
+| 单元测试 | xUnit（203 项）+ Vitest（20 项） |
 
 ## 解决方案结构
 

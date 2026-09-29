@@ -78,6 +78,8 @@ public sealed class AppSettingsService
         public bool CloseToTray { get; init; }
         public bool StartMinimized { get; init; }
         public string Theme { get; init; } = "System";
+        public string? LastWebTheme { get; init; }
+        public bool ClientUpdateCheckEnabled { get; init; } = true;
         public bool SessionCompleteNotifications { get; init; }
         public bool NotificationSoundEnabled { get; init; }
         public bool SessionPluginEscStopEnabled { get; init; } = true;
@@ -96,6 +98,8 @@ public sealed class AppSettingsService
             CloseToTray = settings.CloseToTray,
             StartMinimized = settings.StartMinimized,
             Theme = settings.Theme,
+            LastWebTheme = settings.LastWebTheme,
+            ClientUpdateCheckEnabled = settings.ClientUpdateCheckEnabled,
             SessionCompleteNotifications = settings.SessionCompleteNotifications,
             NotificationSoundEnabled = settings.NotificationSoundEnabled,
             SessionPluginEscStopEnabled = settings.SessionPluginEscStopEnabled,

@@ -1,15 +1,33 @@
 <Application xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              x:Class="DSHSharp.App"
-             xmlns:local="using:DSHSharp"
-             RequestedThemeVariant="Default">
-             <!-- "Default" ThemeVariant follows system theme variant. "Dark" or "Light" are other available options. -->
+             xmlns:local="using:DSHSharp">
+             <!-- 主题由 App.ApplyTheme 决定：显式设置 > 上次 WebUI 外观 > 系统注册表；
+                  品牌色板经 ShellPalettes 直接写入 Resources（运行时切换同样生效）。 -->
 
     <Application.DataTemplates>
         <local:ViewLocator/>
     </Application.DataTemplates>
-  
+
     <Application.Styles>
         <FluentTheme />
+        <!-- 托盘右键菜单（Avalonia TrayPopupRoot 自绘，已验证样式可穿透）：
+             品牌化观感，跟随壳主题（System 跟随 WebUI / 显式 Light/Dark）。 -->
+        <Style Selector="MenuFlyoutPresenter">
+            <Setter Property="Background" Value="{DynamicResource ChromeBarBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource ChromeBorderBrush}"/>
+            <Setter Property="MinWidth" Value="200"/>
+        </Style>
+        <Style Selector="MenuItem">
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Foreground" Value="{DynamicResource ChromeForegroundBrush}"/>
+            <Setter Property="MinHeight" Value="34"/>
+        </Style>
+        <Style Selector="MenuItem:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource ChromeHoverBrush}"/>
+        </Style>
+        <Style Selector="MenuItem:selected /template/ ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource ChromeHoverBrush}"/>
+        </Style>
     </Application.Styles>
 </Application>

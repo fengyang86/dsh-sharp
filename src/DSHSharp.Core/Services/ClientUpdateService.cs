@@ -219,7 +219,8 @@ public sealed class ClientUpdateService
             var requestUri = $"https://api.github.com/repos/{UpdateRepository}/releases/latest";
             var userAgent = $"DSHSharp/{DshSharpCompatibility.ProductVersion}";
             // GitHub API 必须携带 User-Agent；回退链：直连 → 系统代理 → git 配置代理 → 常见本地代理端口。
-            using var response = await HttpFallback.GetAsync(requestUri, CheckTimeout, userAgent, ct: ct);
+            using var fetched = await HttpFallback.GetAsync(requestUri, CheckTimeout, userAgent, ct: ct);
+            using var response = fetched.Response;
             if (!response.IsSuccessStatusCode)
             {
                 Log?.Invoke($"release check failed: HTTP {(int)response.StatusCode}");
@@ -331,11 +332,12 @@ public sealed class ClientUpdateService
     private async Task<long?> DownloadCandidateAsync(string url, string partPath, long totalBytes, CancellationToken ct)
     {
         var existing = File.Exists(partPath) ? new FileInfo(partPath).Length : 0;
-        using var response = await HttpFallback.GetAsync(
+        using var fetched = await HttpFallback.GetAsync(
             url, DownloadTimeout,
             userAgent: $"DSHSharp/{DshSharpCompatibility.ProductVersion}",
             rangeFrom: existing > 0 ? existing : null,
             ct: ct);
+        using var response = fetched.Response;
         if (!response.IsSuccessStatusCode)
         {
             throw new HttpRequestException($"HTTP {(int)response.StatusCode}");

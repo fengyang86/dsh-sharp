@@ -25,7 +25,7 @@
 | 5 | `dshsharp://` 深链 | 安装器注册协议；`dshsharp://session/<id>` 从终端/脚本唤起直达；为进程退出后的通知冷激活铺路 | 待实施 |
 | 6 | 切换器浅色适配 | Ctrl+K 面板配色跟随 web 主题（`body[data-ds-dark-theme]`） | 待实施 |
 | 7 | README 功能全景刷新 | 安装程序 / 原生通知 / 切换器 / 备份等新能力补进门面 | 待实施 |
-| 8 | 版本号单源 | csproj 版本从 `DshSharpCompatibility.ProductVersion` 派生，消除双处手工同步 | 待实施 |
+| 8 | 版本号单源 | 版本号唯一落在 `Directory.Build.props` 的 `<Version>`：csproj 不再声明、运行时经 `AssemblyInformationalVersion` 读取、CI 从 props 提取（原方案反向单源，更贴近 MSBuild 习惯） | 已实施 |
 | 9 | ARCHIVE-NOTES 补记 | `turn/end` reason 分类、`data-ds-theme-source` 桥、切换器 hash 通道、深链协议 | 待实施 |
 
 ## v0.3.0 之后（按需排期）

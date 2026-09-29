@@ -332,6 +332,27 @@ window.__ModuleLoader__.load({
 			return () => observer.disconnect();
 		}
 		//#endregion
+		//#region src/client/theme-apply.ts
+		function installThemeReceiver(ctx) {
+			let theme;
+			const applyHash = () => {
+				const hash = location.hash.startsWith("#") ? location.hash.slice(1) : location.hash;
+				const match = /(?:^|&)dshsharp-theme=(light|dark|system)(?:&|$)/.exec(hash);
+				if (!match) return;
+				theme?.setTheme?.(match[1] ?? "");
+			};
+			const disposeInject = typeof ctx.inject === "function" ? ctx.inject(["theme"], (scope) => {
+				theme = scope.theme;
+				applyHash();
+			}) : void 0;
+			window.addEventListener("hashchange", applyHash);
+			applyHash();
+			return () => {
+				window.removeEventListener("hashchange", applyHash);
+				if (typeof disposeInject === "function") disposeInject();
+			};
+		}
+		//#endregion
 		//#region src/client/workspace-open.ts
 		/**
 		* 在系统文件管理器中打开一个工作区目录。
@@ -480,6 +501,7 @@ window.__ModuleLoader__.load({
 				};
 			}, "dsh-sharp-session: Ctrl+K session switcher");
 			ctx.effect(() => installThemeBridge(), "dsh-sharp-session: theme bridge to host shell");
+			ctx.effect(() => installThemeReceiver(ctx), "dsh-sharp-session: theme receiver from host shell");
 			ctx.slots.inject("shell.overlay", () => ctx.slots.register({
 				name: "shell.overlay",
 				id: "dsh-sharp-session.context-menu",

@@ -55,7 +55,11 @@ DSHSharp.slnx
 | `Services/SingleInstanceService` | 命名 Mutex 单实例 + 命名事件唤起已有窗口 |
 | `Dsh/DshAuthSession` | 认证会话：启动 token 换签名 cookie，RPC/事件流/WebView 共享，401 或重启后重交换 |
 | `Dsh/DshEventMonitor` | 事件监控：remote.mux 逻辑流（api-session 边沿判定完成）+ HTTP 心跳；旧版 events.mux 自动回退 |
-| `Dsh/DshServiceManager` | 私有 Runtime：私有包、私有 `DSH_HOME`、端口回退、进程所有权、失败诊断、孤儿清理（pid 文件 + 命令行兜底扫描） |
+| `Dsh/DshServiceManager` | 私有 Runtime：私有包、私有 `DSH_HOME`、端口回退、进程所有权、失败诊断（信号分类 + 日志轮转）、孤儿清理（pid 文件 + 命令行兜底扫描）；启动前环境预检（Node ≥ 22.13 + npm），不达标自动下载内置 Node 并为全部子进程注入 PATH；安装失败呈网络特征时自动用 npmmirror 镜像重试并自适应记忆偏好（镜像成功 → 下次直走镜像；镜像失败官方成功 → 清除偏好自愈）；安装时写关键文件 SHA256 清单、启动完整性校验失败自动重装；安全模式重启（绕过 CLI 直接改写 profile 清单停用第三方插件） |
+| `Dsh/NodeEnvironment` | Node 环境预检原语：PATH 定位（PATHEXT）、`node --version` 探测（超时兜底 WindowsApps 假 shim）、版本门槛判断 |
+| `Dsh/NodeRuntimeService` | 内置（便携版）Node 按需安装：官方 dist + npmmirror 镜像、SHASUMS256 校验、断点续传、解压 + 执行验证 + 版本标记；仅作子进程叠加层，不改动系统 Node |
+| `Services/WebView2RuntimeService` | WebView2 运行时检测（EdgeUpdate 注册表）与按需安装：官方 Evergreen Bootstrapper、PowerShell Authenticode 签名校验、`/silent /install` 静默执行后注册表复检 |
+| `Services/UpdateInstaller` | 自更新安装阶段（`--apply-update` 模式）：旁路 `.new` 暂存 → 目录改名交换 → WebView2 用户数据携带 → 失败回滚旧目录 |
 | `Dsh/DshApiClient` | HTTP RPC 客户端：session/list / session/page / npm 版本（新旧方法名自动回退） |
 | `Dsh/DshFrameParser` | 事件帧解析（新 emit 帧 + 旧 SessionEvent 信封） |
 | `Dsh/DshRpcParser` | RPC 响应解析（会话列表/分页记录/npm 版本） |
@@ -64,8 +68,8 @@ DSHSharp.slnx
 
 | 模块 | 职责 |
 | --- | --- |
-| `App` | 唯一组装点：启动私有 Runtime 后创建监控/API 客户端，托盘菜单和通知分发 |
-| `MainWindow` | 自定义标题栏、NativeWebView、Runtime 加载/故障页、状态栏 |
+| `App` | 唯一组装点：启动私有 Runtime 后创建监控/API 客户端，托盘菜单和通知分发；更新/重启前运行中会话排水确认（ConfirmWindow）；客户端更新 10 分钟周期轮询（±20% 抖动、失败退避至 1 小时） |
+| `MainWindow` | 自定义标题栏、NativeWebView（惰性创建：缺 WebView2 运行时时引导页仍可用）、启动过场（品牌动画，就绪渐隐）、Runtime 故障页、状态栏 |
 | `SettingsWindow` | 左侧导航：运行时 / 插件 / 偏好设置 / 版本与更新 |
 | `ToastWindow` | 右下角置顶通知（独立窗口，规避 WebView2 原生表面 airspace） |
 

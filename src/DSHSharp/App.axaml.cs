@@ -33,8 +33,13 @@ public partial class App : Application
     /// <summary>本次启动是否来自自启动（--autostart）。</summary>
     public static bool AutoStartLaunch { get; set; }
 
+    /// <summary>冷启动计时（Program.Main 起表）：框架初始化/服务就绪耗时写入 app.log，
+    /// 为 R2R/NativeAOT 的启动收益提供实测基线。</summary>
+    public static System.Diagnostics.Stopwatch? StartupStopwatch { get; set; }
+
     private readonly AppSettingsService _settingsService = new();
     private readonly IAutoStartService _autoStart = AutoStartServiceFactory.Create();
+    private readonly DSHSharp.Core.Services.WebView2RuntimeService _webView2Service = new();
     private DshEventMonitor? _monitor;
     private DshServiceManager? _serviceManager;
     private DshApiClient? _apiClient;
@@ -42,19 +47,29 @@ public partial class App : Application
     private ClientUpdateService? _clientUpdate;
     private MainWindow? _mainWindow;
     private SettingsWindow? _settingsWindow;
-    private TrayIcon? _trayIcon;
+    private Services.NotifyIconService? _notifyIcon;
     private Services.GlobalHotkeyService? _hotkeys;
 
     /// <summary>主窗口基础标题（与 MainWindow.axaml 的 Title 一致），运行计数作为后缀追加。</summary>
     private const string BaseWindowTitle = "DSH-Sharp";
-    private NativeMenu? _trayMenu;
-    private NativeMenuItem? _trayServiceItem;
-    private NativeMenuItem? _traySessionsItem;
     private Timer? _sessionRefreshTimer;
     private int _sessionRefreshFailures;
+    // 会话刷新在途标记（Interlocked）：并发触发只放行一次 RPC。
+    private int _refreshInFlight;
+    // 客户端更新轮询：单次触发定时器，每次完成后按结果重排（失败退避）。
+    private Timer? _clientUpdateTimer;
+    private TimeSpan _clientUpdateBackoff = TimeSpan.Zero;
+    // 冷启动基线：服务首次就绪的耗时只记一次（后续重启不重复统计）。
+    private bool _serviceOnlineLogged;
+    // 托盘快捷面板数据：最近一次会话列表刷新的快照（UI 线程更新）。
+    private IReadOnlyList<DshSessionSummary> _lastSessions = [];
+    // 托盘左键快捷面板实例（单例复用；失焦自关）。
+    private Views.TrayFlyoutWindow? _trayFlyout;
     private bool _isExiting;
     private bool _serviceOnline;
     private bool _isStarting;
+    // WebView2 运行时是否可用；预检确认缺失/安装中为 false（乐观初值，启动后立即校正）。
+    private volatile bool _webView2Ready = true;
 
     /// <summary>当前应用设置。</summary>
     public AppSettings Settings { get; private set; } = new();
@@ -90,6 +105,7 @@ public partial class App : Application
             // 自启动开关以系统实际状态为准（防止设置与注册表脱节）。
             Settings.AutoStartEnabled = _autoStart.IsEnabled();
             ApplyTheme(Settings.Theme);
+            StartSystemThemeWatcher();
 
             _mainWindow = new MainWindow(Settings);
             desktop.MainWindow = _mainWindow;
@@ -100,6 +116,9 @@ public partial class App : Application
             SetupTrayIcon();
             SetupServiceManager();
             SetupGlobalHotkeys();
+            // WebView2 安装进度 → 引导页（与 Node 下载进度共用同一面板）。
+            _webView2Service.StateChanged += (_, state) =>
+                SafePost("webview2:state", () => OnWebView2StateChanged(state));
 
             if (AutoStartLaunch || Settings.StartMinimized)
             {
@@ -111,8 +130,15 @@ public partial class App : Application
                 _mainWindow.Show();
             }
 
+            // WebView 预热：运行时存在时提前创建隐藏控件，WebView2 初始化与 DSH Runtime 启动并行，
+            // 服务就绪后的首次导航不再串行等待控件创建。
+            _mainWindow.TryPrepareWebView();
+
             // DSH-Sharp 是私有 Runtime 的唯一宿主。服务就绪后才创建 WebView 连接。
             _ = StartManagedServiceAsync();
+
+            // WebView2 运行时预检：缺失时后台静默安装（与 Node 预检同为自动修复，不阻塞服务启动）。
+            _ = EnsureWebView2RuntimeAsync();
 
             // 客户端更新：启动即检查并后台预下载（失败静默，可到设置页手动重试）。
             _clientUpdate = new ClientUpdateService();
@@ -122,18 +148,29 @@ public partial class App : Application
             {
                 _ = Task.Run(() => _clientUpdate.CheckAsync());
             }
+
+            // 周期轮询（借鉴官方桌面端）：10 分钟基础间隔 ±20% 抖动，失败指数退避至 1 小时。
+            StartClientUpdatePolling();
+
+            Log($"startup: framework initialized in {StartupStopwatch?.ElapsedMilliseconds ?? -1}ms");
         }
 
         base.OnFrameworkInitializationCompleted();
     }
 
-    /// <summary>下载就绪的客户端更新：拉起 staging 新 EXE 自安装并退出当前实例。</summary>
-    public void InstallClientUpdate()
+    /// <summary>下载就绪的客户端更新：拉起 staging 新 EXE 自安装并退出当前实例。
+    /// 更新会重启客户端及其托管的 Runtime：运行中会话将被打断，需用户确认。</summary>
+    public async void InstallClientUpdate()
     {
         var staging = _clientUpdate?.State.StagingDirectory;
         if (staging is null || !File.Exists(Path.Combine(staging, "DSHSharp.exe")))
         {
             Log("client update install skipped: staging not ready");
+            return;
+        }
+
+        if (!await ConfirmInterruptionAsync("升级并重启客户端"))
+        {
             return;
         }
 
@@ -160,6 +197,57 @@ public partial class App : Application
         }
 
         RequestShutdown();
+    }
+
+    /// <summary>
+    /// 更新/重启前的排水确认（借鉴官方桌面端）：有运行中 agent 会话时弹确认框，
+    /// 用户批准才继续中断；没有运行中会话直接放行。
+    /// </summary>
+    private async Task<bool> ConfirmInterruptionAsync(string actionText)
+    {
+        var running = await CountRunningSessionsAsync();
+        if (running == 0)
+        {
+            return true;
+        }
+
+        Avalonia.Controls.Window? owner = _settingsWindow is { IsVisible: true } ? _settingsWindow : _mainWindow;
+        if (owner is null)
+        {
+            return true; // 无可交互窗口（理论不可达）：不阻塞。
+        }
+
+        var confirmed = await Views.ConfirmWindow.AskAsync(
+            owner,
+            actionText,
+            $"有 {running} 个会话正在运行，{actionText}会中断这些会话。\n确定要继续吗？",
+            actionText);
+        Log($"interruption confirm ({actionText}): running={running}, confirmed={confirmed}");
+        return confirmed;
+    }
+
+    /// <summary>统计运行中会话数：优先事件流实时状态，不可用时回退一次 session/list 查询。</summary>
+    private async Task<int> CountRunningSessionsAsync()
+    {
+        if (_monitor is { } monitor)
+        {
+            return monitor.RunningSnapshot().Count;
+        }
+
+        if (_apiClient is { } client && _serviceOnline)
+        {
+            try
+            {
+                var sessions = await client.ListSessionsAsync();
+                return sessions.Count(s => s.Running);
+            }
+            catch (Exception ex)
+            {
+                Log($"running session count query failed: {ex.Message}");
+            }
+        }
+
+        return 0;
     }
 
     /// <summary>唤起主窗口（单实例第二实例通知、托盘点击、通知点击）。线程安全，可在任意线程调用。</summary>
@@ -198,8 +286,8 @@ public partial class App : Application
         SaveWindowState();
         _hotkeys?.Dispose();
         _hotkeys = null;
-        _trayIcon?.Dispose();
-        _trayIcon = null;
+        _notifyIcon?.Dispose();
+        _notifyIcon = null;
         Log("app OnExit finished");
     }
 
@@ -233,6 +321,7 @@ public partial class App : Application
     private void SetupServiceManager()
     {
         DshServiceManager.Log = Log;
+        NodeRuntimeService.Log = Log;
         _serviceManager = new DshServiceManager(AppSettings.DefaultWebUrl, ManagedMode.Npx, null);
         _serviceManager.ProcessExitedUnexpectedly += (_, _) =>
             SafePost("service:crashed", () =>
@@ -244,6 +333,27 @@ public partial class App : Application
                 {
                     _mainWindow?.ShowNotification("DSH Runtime 已退出", "正在尝试自动恢复…");
                     _ = RecoverRuntimeAsync();
+                }
+            });
+        // 内置 Node 下载/校验/解压进度：下载发生在 StartAsync 内部（引导页已处于 busy 态），直接覆盖更新详情。
+        _serviceManager.NodeRuntime.StateChanged += (_, state) =>
+            SafePost("node:state", () =>
+            {
+                if (_serviceOnline)
+                {
+                    return;
+                }
+
+                var detail = state.Phase switch
+                {
+                    "Downloading" => $"正在下载内置 Node（约 30MB）… {state.DownloadPercent}%",
+                    "Verifying" => "正在校验内置 Node 安装包…",
+                    "Extracting" => "正在解压内置 Node…",
+                    _ => null,
+                };
+                if (detail is not null)
+                {
+                    _mainWindow?.ShowOnboarding(true, detail, true);
                 }
             });
     }
@@ -260,10 +370,22 @@ public partial class App : Application
         UpdateServiceUi();
         try
         {
+            // WebView2 修复失败后的重试入口：重试服务的同时重试运行时安装。
+            if (!_webView2Ready)
+            {
+                _ = EnsureWebView2RuntimeAsync();
+            }
+
             var ok = await _serviceManager.StartAsync();
             Log($"managed start: ok={ok}, error={_serviceManager.LastError ?? "none"}");
             if (ok)
             {
+                if (!_serviceOnlineLogged)
+                {
+                    _serviceOnlineLogged = true;
+                    Log($"startup: service online in {StartupStopwatch?.ElapsedMilliseconds ?? -1}ms");
+                }
+
                 _serviceOnline = true;
                 ConnectRuntime();
             }
@@ -289,6 +411,108 @@ public partial class App : Application
         }
 
         await StartManagedServiceAsync();
+    }
+
+    /// <summary>安全模式重启（故障页按钮触发）：停服并停用第三方插件激活后重启 Runtime。</summary>
+    public async Task RestartInSafeModeAsync()
+    {
+        var manager = _serviceManager;
+        if (manager is null || _isStarting)
+        {
+            return;
+        }
+
+        _isStarting = true;
+        UpdateServiceUi();
+        try
+        {
+            var ok = await manager.RestartInSafeModeAsync();
+            Log($"safe mode restart: ok={ok}, error={manager.LastError ?? "none"}");
+            if (ok)
+            {
+                _serviceOnline = true;
+                ConnectRuntime();
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"safe mode restart threw: {ex}");
+        }
+        finally
+        {
+            _isStarting = false;
+        }
+
+        UpdateServiceUi();
+    }
+
+    /// <summary>WebView2 运行时预检与自动安装（后台执行，不阻塞 DSH Runtime 启动）。</summary>
+    private async Task EnsureWebView2RuntimeAsync()
+    {
+        DSHSharp.Core.Services.WebView2RuntimeService.Log = Log;
+        if (DSHSharp.Core.Services.WebView2RuntimeService.IsInstalled)
+        {
+            _webView2Ready = true;
+            return;
+        }
+
+        _webView2Ready = false;
+        Log("webview2 runtime missing; auto-installing");
+        try
+        {
+            _webView2Ready = await _webView2Service.EnsureAsync();
+        }
+        catch (Exception ex)
+        {
+            Log($"webview2 ensure failed: {ex.Message}");
+            _webView2Ready = false;
+        }
+
+        SafePost("webview2:done", () =>
+        {
+            // 安装晚于服务就绪时（典型时序），这里补上本该由 ConnectRuntime 做的首导航。
+            if (_webView2Ready && _serviceOnline)
+            {
+                _mainWindow?.ReloadWeb(BuildPluginFeatureUrl(RuntimeBaseUrl));
+            }
+
+            UpdateServiceUi();
+        });
+    }
+
+    /// <summary>WebView2 安装进度 → 引导页详情（Node 下载进行中时让位，避免两条进度互相覆盖）。</summary>
+    private void OnWebView2StateChanged(DSHSharp.Core.Services.WebView2RuntimeState state)
+    {
+        if (_webView2Ready)
+        {
+            return;
+        }
+
+        if (_serviceManager?.NodeRuntime.State.Phase is "Downloading" or "Verifying" or "Extracting")
+        {
+            return;
+        }
+
+        var detail = state.Phase switch
+        {
+            "Downloading" => $"正在下载 WebView2 安装器… {state.DownloadPercent}%",
+            "Verifying" => "正在校验 WebView2 安装器签名…",
+            "Installing" => "正在安装 WebView2 运行时（微软官方源，可能需要几分钟）…",
+            _ => null,
+        };
+        if (detail is not null)
+        {
+            _mainWindow?.ShowOnboarding(true, detail, busy: true);
+        }
+    }
+
+    /// <summary>引导页上展示的 WebView2 状态详情（安装中/失败两种形态）。</summary>
+    private string BuildWebView2Detail()
+    {
+        var state = _webView2Service.State;
+        return state.Phase == "Failed"
+            ? $"WebView2 运行时缺失，自动安装失败：{state.Error}\n可点击\"重试启动\"再次尝试；多次失败请从微软官网安装 Evergreen 版后重启客户端。"
+            : "WebView2 运行时缺失，正在自动安装（微软官方源，约 100MB）…\n安装完成后会自动进入 DSH WebUI。";
     }
 
     /// <summary>停止本客户端拥有的私有 Runtime。</summary>
@@ -327,7 +551,33 @@ public partial class App : Application
     {
         // token 由 query 携带且只用于根路径交换；功能开关放 fragment（303 重定向后仍保留），
         // 由 dsh-sharp-session 插件从 location.hash 读取。
-        return baseUrl.Contains('#') ? baseUrl : $"{baseUrl}#{BuildPluginFeatureHash(Settings)}";
+        if (baseUrl.Contains('#'))
+        {
+            return baseUrl;
+        }
+
+        var hash = BuildPluginFeatureHash(Settings);
+        // 显式主题随首导航下发给插件（theme.setTheme 落 WebUI 自己的设置）；
+        // System 档不下发——该档位以 WebUI 为权威，方向反过来（主题桥镜像回壳）。
+        if (Settings.Theme is "Light" or "Dark")
+        {
+            hash += $"&dshsharp-theme={Settings.Theme.ToLowerInvariant()}";
+        }
+
+        return $"{baseUrl}#{hash}";
+    }
+
+    /// <summary>把壳端主题选择推送给 WebUI（插件 hash 通道 → 官方 theme.setTheme → WebUI 持久化）。
+    /// 供设置页切换时即时联动；WebUI 变化后主题桥会回报，双向闭环。</summary>
+    private void PushThemeToWebUi(string theme)
+    {
+        if (theme is not ("Light" or "Dark"))
+        {
+            return; // System：WebUI 自己说了算。
+        }
+
+        _mainWindow?.NavigateToPluginHash($"dshsharp-theme={theme.ToLowerInvariant()}");
+        Log($"theme pushed to webui: {theme}");
     }
 
     /// <summary>构造内置插件功能开关的 fragment 参数（不含 #）。</summary>
@@ -371,21 +621,22 @@ public partial class App : Application
     /// <summary>保存设置：即时应用可生效项，持久化，提示重启生效项。</summary>
     public void SaveSettings(AppSettings updated)
     {
-        if (updated.AutoStartEnabled != Settings.AutoStartEnabled)
+        try
         {
-            try
+            if (_autoStart.IsEnabled() != updated.AutoStartEnabled)
             {
                 _autoStart.SetEnabled(updated.AutoStartEnabled);
             }
-            catch (Exception ex)
-            {
-                Log($"autostart set failed: {ex.Message}");
-            }
+        }
+        catch (Exception ex)
+        {
+            Log($"autostart set failed: {ex.Message}");
         }
 
-        if (updated.Theme != Settings.Theme)
+        if (updated.Theme != _lastAppliedTheme)
         {
             ApplyTheme(updated.Theme);
+            PushThemeToWebUi(updated.Theme);
         }
         Settings.SessionPluginEscStopEnabled = updated.SessionPluginEscStopEnabled;
         Settings.SessionPluginCopyIdEnabled = updated.SessionPluginCopyIdEnabled;
@@ -407,8 +658,8 @@ public partial class App : Application
         Log("settings saved");
 
         _mainWindow?.ShowNotification(
-            "设置已保存",
-            "更改已即时生效。");
+            "设置已应用",
+            "更改已保存并即时生效。");
     }
 
     /// <summary>OS 级全局热键：Ctrl+Alt+D 唤起主窗口；Ctrl+Alt+K 唤起并呼出会话切换器。</summary>
@@ -436,54 +687,106 @@ public partial class App : Application
 
     private void SetupTrayIcon()
     {
+        if (!OperatingSystem.IsWindows())
+        {
+            StartSessionRefresh();
+            return;
+        }
+
         using var iconStream = AssetLoader.Open(new Uri("avares://DSHSharp/Assets/avalonia-logo.ico"));
-        var icon = new WindowIcon(iconStream);
+        var iconHandle = GetIconHandle(iconStream);
 
-        var menu = new NativeMenu();
-        var showItem = new NativeMenuItem("显示主窗口");
-        showItem.Click += (_, _) => SafePost("tray:show", ActivateMainWindow);
-        menu.Items.Add(showItem);
-        var settingsItem = new NativeMenuItem("设置…");
-        settingsItem.Click += (_, _) => SafePost("tray:settings", OpenSettingsWindow);
-        menu.Items.Add(settingsItem);
-        var newSessionItem = new NativeMenuItem("新建会话");
-        newSessionItem.Click += (_, _) => SafePost("tray:new-session", () =>
+        _notifyIcon = new Services.NotifyIconService("DSH-Sharp");
+        // Windows 托盘惯例：左键单击 = 主窗口；双击 = 主窗口；右键 = 菜单/面板（唯一富交互入口）。
+        _notifyIcon.Clicked += args =>
         {
+            Log($"tray left-click at {args.CursorX},{args.CursorY} -> main window");
+            if (_trayFlyout is { IsVisible: true })
+            {
+                _trayFlyout.Close();
+            }
+
             ActivateMainWindow();
-            _mainWindow?.NavigateHome();
-        });
-        menu.Items.Add(newSessionItem);
-        menu.Items.Add(new NativeMenuItemSeparator());
-        _traySessionsItem = new NativeMenuItem("最近会话（私有 Runtime）")
-        {
-            IsEnabled = false,
         };
-        _traySessionsItem.Menu = new NativeMenu();
-        _traySessionsItem.Menu.Items.Add(new NativeMenuItem("（正在准备私有 Runtime）") { IsEnabled = false });
-        menu.Items.Add(_traySessionsItem);
-        menu.Items.Add(new NativeMenuItemSeparator());
-        _trayServiceItem = new NativeMenuItem("DSH Runtime：正在准备");
-        _trayServiceItem.Click += (_, _) => SafePost("tray:service", OnTrayServiceClick);
-        menu.Items.Add(_trayServiceItem);
-        var aboutItem = new NativeMenuItem("关于 DSH-Sharp");
-        aboutItem.Click += (_, _) => SafePost("tray:about", ShowAbout);
-        menu.Items.Add(aboutItem);
-        menu.Items.Add(new NativeMenuItemSeparator());
-        var exitItem = new NativeMenuItem("退出");
-        exitItem.Click += (_, _) => SafePost("tray:exit", RequestShutdown);
-        menu.Items.Add(exitItem);
-        _trayMenu = menu;
+        _notifyIcon.DoubleClicked += args =>
+        {
+            Log($"tray double-click at {args.CursorX},{args.CursorY}");
+            if (_trayFlyout is { IsVisible: true })
+            {
+                _trayFlyout.Close();
+            }
 
-        _trayIcon = new TrayIcon
-        {
-            Icon = icon,
-            ToolTipText = "DSH-Sharp",
-            Menu = menu,
-            IsVisible = true,
+            ActivateMainWindow();
         };
-        _trayIcon.Clicked += (_, _) => SafePost("tray:clicked", ActivateMainWindow);
-        RefreshTrayMenu();
+        _notifyIcon.RightClicked += args =>
+        {
+            Log($"tray right-click (icon anchor {args.CursorX},{args.CursorY})");
+            ShowTrayFlyoutAt(args.CursorX, args.CursorY);
+        };
+        if (!_notifyIcon.TryInstall(iconHandle))
+        {
+            Log($"notify icon install failed (hwnd created={_notifyIcon.HasMessageWindow}, iconHandle={iconHandle != IntPtr.Zero})");
+        }
+        else
+        {
+            Log("notify icon installed");
+            UpdateTrayTip();
+        }
+
         StartSessionRefresh();
+    }
+
+    /// <summary>从 ico 资源流提取 Win32 HICON：落临时 .ico 文件 → PrivateExtractIconsW → 删临时文件。</summary>
+    private static IntPtr GetIconHandle(Stream iconStream)
+    {
+        try
+        {
+            var tempPath = Path.Combine(Path.GetTempPath(), $"dshsharp-{Guid.NewGuid():N}.ico");
+            try
+            {
+                using (var file = File.Create(tempPath))
+                {
+                    iconStream.CopyTo(file);
+                }
+
+                var handles = new IntPtr[1];
+                var extracted = PrivateExtractIconsW(tempPath, 0, 48, 48, handles, null, 1, 0);
+                return extracted > 0 ? handles[0] : IntPtr.Zero;
+            }
+            finally
+            {
+                TryDeleteFile(tempPath);
+            }
+        }
+        catch (Exception)
+        {
+            return IntPtr.Zero;
+        }
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (IOException)
+        {
+        }
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    private static extern uint PrivateExtractIconsW(
+        string szFileName, int nIconIndex, int cxIcon, int cyIcon,
+        IntPtr[]? phicon, int[]? piconid, int nIcons, uint flags);
+
+    /// <summary>托盘悬停提示（自研图标直接设置，127 字符上限内部截断）。</summary>
+    private void UpdateTrayTip()
+    {
+        var running = _lastSessions.Count(session => session.Running);
+        var runtime = _serviceOnline ? $" · {RuntimeBaseUrl}" : " · Runtime 未运行";
+        _notifyIcon?.UpdateTip($"DSH-Sharp v{DshSharpCompatibility.ProductVersion}" +
+            (running > 0 ? $" · {running} 个会话运行中" : "") + runtime);
     }
 
     /// <summary>启动会话列表自调度刷新（成功 60s；连续失败指数退避至 10 分钟，避免 401 刷屏日志）。</summary>
@@ -513,7 +816,74 @@ public partial class App : Application
         }
     }
 
-    /// <summary>拉取会话列表并更新托盘"最近会话"子菜单。</summary>
+    /// <summary>事件驱动的即时刷新：滑动 2 秒合并窗口——多会话密集启停时收敛为一次 RPC。</summary>
+    private void ScheduleSessionRefreshSoon()
+    {
+        try
+        {
+            _sessionRefreshTimer?.Change(TimeSpan.FromSeconds(2), Timeout.InfiniteTimeSpan);
+        }
+        catch (ObjectDisposedException)
+        {
+            // 退出路径：忽略。
+        }
+    }
+
+    /// <summary>启动客户端更新周期轮询（单次触发定时器，自调度重排）。</summary>
+    private void StartClientUpdatePolling()
+    {
+        _clientUpdateTimer = new Timer(
+            _ => _ = PollClientUpdateAsync(),
+            null,
+            TimeSpan.FromMinutes(10), // 启动时已检查过一次，首个轮询从一个完整间隔开始。
+            Timeout.InfiniteTimeSpan);
+    }
+
+    /// <summary>一次轮询：更新就绪（等安装）或开关关闭时跳过检查只重排；失败进入指数退避。</summary>
+    private async Task PollClientUpdateAsync()
+    {
+        try
+        {
+            var skipCheck = _clientUpdate?.IsReady == true || !Settings.ClientUpdateCheckEnabled;
+            if (!skipCheck && _clientUpdate is not null)
+            {
+                await _clientUpdate.CheckAsync();
+            }
+
+            _clientUpdateBackoff = _clientUpdate?.State.Phase == "CheckFailed"
+                ? TimeSpan.FromTicks(Math.Min(
+                    Math.Max(_clientUpdateBackoff.Ticks, TimeSpan.FromMinutes(10).Ticks) * 2,
+                    TimeSpan.FromHours(1).Ticks))
+                : TimeSpan.Zero;
+        }
+        catch (Exception ex)
+        {
+            Log($"client update poll failed: {ex.Message}");
+            _clientUpdateBackoff = TimeSpan.FromMinutes(10); // 意外异常按一次退避处理。
+        }
+        finally
+        {
+            ScheduleClientUpdatePoll();
+        }
+    }
+
+    /// <summary>重排下一次轮询：基础间隔（或退避间隔）乘 ±20% 抖动，避免集中请求。</summary>
+    private void ScheduleClientUpdatePoll()
+    {
+        var baseDelay = _clientUpdateBackoff == TimeSpan.Zero ? TimeSpan.FromMinutes(10) : _clientUpdateBackoff;
+        var jitter = 1.0 + (Random.Shared.NextDouble() * 0.4 - 0.2);
+        var delay = TimeSpan.FromMilliseconds(baseDelay.TotalMilliseconds * jitter);
+        try
+        {
+            _clientUpdateTimer?.Change(delay, Timeout.InfiniteTimeSpan);
+        }
+        catch (ObjectDisposedException)
+        {
+            // 退出路径：忽略。
+        }
+    }
+
+    /// <summary>拉取会话列表并更新托盘"最近会话"子菜单（在途去重：并发触发只放行一次）。</summary>
     private async Task RefreshSessionsAsync()
     {
         var client = _apiClient;
@@ -523,90 +893,41 @@ public partial class App : Application
             return;
         }
 
-        IReadOnlyList<DshSessionSummary> sessions;
+        if (Interlocked.Exchange(ref _refreshInFlight, 1) == 1)
+        {
+            return; // 已有在途请求：其结果覆盖最新状态，完成后的常规重排兜底。
+        }
+
         try
         {
-            sessions = await client.ListSessionsAsync();
-            _sessionRefreshFailures = 0;
-        }
-        catch (Exception ex)
-        {
-            _sessionRefreshFailures++;
-            Log($"session list refresh failed ({_sessionRefreshFailures}): {ex.Message}");
-            if (_sessionRefreshFailures == 1)
+            IReadOnlyList<DshSessionSummary> sessions;
+            try
             {
-                ShowSessionListError("会话列表暂不可用，正在自动重试");
+                sessions = await client.ListSessionsAsync();
+                _sessionRefreshFailures = 0;
+            }
+            catch (Exception ex)
+            {
+                _sessionRefreshFailures++;
+                Log($"session list refresh failed ({_sessionRefreshFailures}): {ex.Message}");
+                ScheduleSessionRefresh();
+                return;
             }
 
+        Dispatcher.UIThread.Post(() =>
+        {
+            _lastSessions = sessions;
+            UpdateTrayTip();
+        });
             ScheduleSessionRefresh();
-            return;
         }
-
-        Dispatcher.UIThread.Post(() =>
+        finally
         {
-            var menu = _traySessionsItem?.Menu;
-            if (menu is null)
-            {
-                return;
-            }
-
-            menu.Items.Clear();
-            if (sessions.Count == 0)
-            {
-                menu.Items.Add(new NativeMenuItem("（暂无会话）") { IsEnabled = false });
-                return;
-            }
-
-            foreach (var session in sessions.Take(8))
-            {
-                var title = string.IsNullOrEmpty(session.Title)
-                    ? ShortId(session.SessionId)
-                    : session.Title;
-                if (title.Length > 24)
-                {
-                    title = title[..24] + "…";
-                }
-
-                var item = new NativeMenuItem((session.Running ? "● " : "") + title);
-                var sessionId = session.SessionId;
-                if (!string.IsNullOrEmpty(session.Cwd))
-                {
-                    // 每个会话附带"打开所在目录"：查"这个会话在哪个仓库跑"不用进 WebUI。
-                    var cwd = session.Cwd;
-                    item.Menu = new NativeMenu();
-                    var openItem = new NativeMenuItem("打开会话");
-                    openItem.Click += (_, _) => SafePost("tray:session", () => NavigateToSession(sessionId));
-                    var revealItem = new NativeMenuItem("打开所在目录");
-                    revealItem.Click += (_, _) => SafePost("tray:workspace", () => OpenDirectoryInFileManager(cwd));
-                    item.Menu.Items.Add(openItem);
-                    item.Menu.Items.Add(revealItem);
-                }
-                else
-                {
-                    item.Click += (_, _) => SafePost("tray:session", () => NavigateToSession(sessionId));
-                }
-
-                menu.Items.Add(item);
-            }
-        });
-        ScheduleSessionRefresh();
+            Volatile.Write(ref _refreshInFlight, 0);
+        }
     }
 
-    /// <summary>会话列表获取失败时在托盘子菜单给出可见提示（失败恢复后由下次成功刷新覆盖）。</summary>
-    private void ShowSessionListError(string message)
-    {
-        Dispatcher.UIThread.Post(() =>
-        {
-            var menu = _traySessionsItem?.Menu;
-            if (menu is null)
-            {
-                return;
-            }
 
-            menu.Items.Clear();
-            menu.Items.Add(new NativeMenuItem($"（{message}）") { IsEnabled = false });
-        });
-    }
 
     private void NavigateToSession(string sessionId)
     {
@@ -627,6 +948,43 @@ public partial class App : Application
             Log($"open workspace directory failed ({directory}): {ex.Message}");
         }
     }
+
+
+    /// <summary>在指定锚点（托盘图标）弹出品牌化面板：面板右下角 = 锚点在任务栏上沿的投影。</summary>
+    private void ShowTrayFlyoutAt(int cursorX, int cursorY)
+    {
+        if (_trayFlyout is { IsVisible: true })
+        {
+            _trayFlyout.Close();
+        }
+
+        _trayFlyout = new Views.TrayFlyoutWindow
+        {
+            OpenMain = ActivateMainWindow,
+            NewSession = () =>
+            {
+                ActivateMainWindow();
+                _mainWindow?.NavigateHome();
+            },
+            OpenSession = sessionId => NavigateToSession(sessionId),
+            ToggleRuntime = OnTrayServiceClick,
+            OpenSettings = OpenSettingsWindow,
+            Exit = RequestShutdown,
+        };
+        _trayFlyout.Closed += (_, _) => _trayFlyout = null;
+        var running = _lastSessions.Count(session => session.Running);
+        _trayFlyout.Present(
+            serviceOnline: _serviceOnline,
+            runningCount: running,
+            runtimeStatus: _serviceManager?.IsOwned == true ? $"运行中 · {RuntimeBaseUrl}" : _serviceOnline ? "外部服务" : "未运行",
+            runtimeOwned: _serviceManager?.IsOwned == true,
+            sessions: _lastSessions
+                .Take(6)
+                .Select(x => new Views.TraySessionItem(x.SessionId, string.IsNullOrEmpty(x.Title) ? ShortId(x.SessionId) : (x.Title.Length > 26 ? x.Title[..26] + "…" : x.Title), x.Running))
+                .ToArray(),
+            anchor: new Avalonia.PixelPoint(cursorX, cursorY));
+    }
+
 
     /// <summary>托盘"关于"：弹出版本信息 Toast。</summary>
     private void ShowAbout()
@@ -653,60 +1011,11 @@ public partial class App : Application
         }
     }
 
-    /// <summary>按当前 Runtime 状态刷新托盘菜单项（UI 线程调用）。</summary>
+    /// <summary>托盘菜单已最小化为引导条目（完整交互在左键面板），保留调用点便于将来扩展。</summary>
     private void RefreshTrayMenu()
     {
-        if (_trayServiceItem is null || _serviceManager is null)
-        {
-            return;
-        }
-
-        if (_isStarting)
-        {
-            _trayServiceItem.Header = "DSH Runtime：正在启动…";
-            _trayServiceItem.IsEnabled = false;
-        }
-        else if (_serviceManager.IsOwned && _serviceOnline)
-        {
-            _trayServiceItem.Header = $"停止 DSH Runtime（{RuntimeBaseUrl}）";
-            _trayServiceItem.IsEnabled = true;
-        }
-        else if (_serviceManager.IsOwned)
-        {
-            _trayServiceItem.Header = "DSH Runtime：正在连接…";
-            _trayServiceItem.IsEnabled = false;
-        }
-        else if (!_serviceOnline)
-        {
-            _trayServiceItem.Header = "启动 DSH Runtime";
-            _trayServiceItem.IsEnabled = true;
-        }
-        else
-        {
-            _trayServiceItem.Header = "DSH Runtime：状态同步中";
-            _trayServiceItem.IsEnabled = false;
-        }
-
-        RefreshTraySessionAvailability();
     }
 
-    /// <summary>最近会话只属于私有 Runtime；离线后清除过期会话入口。</summary>
-    private void RefreshTraySessionAvailability()
-    {
-        if (_traySessionsItem?.Menu is not { } menu)
-        {
-            return;
-        }
-
-        _traySessionsItem.IsEnabled = _serviceOnline;
-        if (_serviceOnline)
-        {
-            return;
-        }
-
-        menu.Items.Clear();
-        menu.Items.Add(new NativeMenuItem("（私有 Runtime 未运行）") { IsEnabled = false });
-    }
 
     /// <summary>在 UI 线程安全执行托盘回调（托盘事件可能在非 UI 线程触发），并记录异常。</summary>
     private static void SafePost(string action, Action handler)
@@ -731,7 +1040,8 @@ public partial class App : Application
         }
     }
 
-    /// <summary>追加一行应用日志（%APPDATA%/DSHSharp/app.log），用于排查桌面壳问题。</summary>
+    /// <summary>追加一行应用日志（%APPDATA%/DSHSharp/app.log），用于排查桌面壳问题。
+    /// 与服务日志共用 2MB 轮转，常驻运行不无限增长。</summary>
     public static void Log(string message)
     {
         try
@@ -742,6 +1052,7 @@ public partial class App : Application
                 Directory.CreateDirectory(directory);
             }
 
+            DshServiceManager.RotateLogFile(LogPath, DshServiceManager.MaxServiceLogBytes);
             File.AppendAllText(LogPath, $"[{DateTime.Now:HH:mm:ss.fff}] {message}{Environment.NewLine}");
         }
         catch
@@ -932,15 +1243,10 @@ public partial class App : Application
                 Services.WindowsTaskbarProgress.SetRunningIndicator(handle, count > 0);
             }
 
-            if (_trayIcon is not null)
-            {
-                var running = count > 0 ? $" · {count} 个会话运行中" : string.Empty;
-                var runtime = _serviceOnline ? $" · {RuntimeBaseUrl}" : " · Runtime 未运行";
-                _trayIcon.ToolTipText = $"DSH-Sharp v{DshSharpCompatibility.ProductVersion}{running}{runtime}";
-            }
+            UpdateTrayTip();
 
-            // 事件驱动的即时刷新：托盘菜单里的 "●" 运行标记与列表次序保持新鲜（复用节流调度）。
-            _ = RefreshSessionsAsync();
+            // 事件驱动的即时刷新：滑动 2 秒合并窗口，托盘 "●" 运行标记与列表次序保持新鲜。
+            ScheduleSessionRefreshSoon();
         }
         catch (Exception ex)
         {
@@ -987,19 +1293,48 @@ public partial class App : Application
 
         if (!_serviceOnline)
         {
-            var detail = _isStarting ? "正在准备私有 DSH Runtime…" : _serviceManager?.LastError ?? BuildOnboardingDetail();
-            _mainWindow.ShowOnboarding(true, detail, _isStarting || owned);
+            if (_isStarting)
+            {
+                // 正常启动：只显示品牌过场动画（不出现"正在准备 Runtime"的工程文案）。
+                // Node/WebView2 修复进度与故障页由各自处理器调 ShowOnboarding 覆盖（Z 序在过场之上）。
+                _mainWindow.ShowOnboarding(false, null, false);
+                _mainWindow.ShowSplash(true);
+            }
+            else
+            {
+                _mainWindow.ShowSplash(false);
+                var detail = _serviceManager?.LastError ?? BuildOnboardingDetail();
+                _mainWindow.ShowOnboarding(true, detail, owned);
+            }
+
+            // 安全模式入口：只在"启动失败（非忙）+ 存在已激活第三方插件"时出现。
+            _mainWindow.SetSafeModeOffer(
+                !_isStarting &&
+                !owned &&
+                _serviceManager?.LastError is not null &&
+                _serviceManager.HasThirdPartyPluginsActive);
         }
         else
         {
-            _mainWindow.ShowOnboarding(false, null, false);
-            // 深链（dshsharp://session/<id>）冷启动：服务就绪后导航一次；
-            // 插件侧的 store 就绪重试保证早于列表 baseline 的导航也能生效。
-            if (PendingDeepLinkSession is { } session)
+            _mainWindow.ShowSplash(false);
+            _mainWindow.SetSafeModeOffer(false);
+            if (_mainWindow.TryPrepareWebView())
             {
-                PendingDeepLinkSession = null;
-                Log($"deep link session navigation: {session}");
-                NavigateToSession(session);
+                _mainWindow.ShowOnboarding(false, null, false);
+                // 深链（dshsharp://session/<id>）冷启动：服务就绪后导航一次；
+                // 插件侧的 store 就绪重试保证早于列表 baseline 的导航也能生效。
+                if (PendingDeepLinkSession is { } session)
+                {
+                    PendingDeepLinkSession = null;
+                    Log($"deep link session navigation: {session}");
+                    NavigateToSession(session);
+                }
+            }
+            else
+            {
+                // WebView2 缺失/安装中：Web 面板保持隐藏，引导页转为运行时修复视图。
+                var repairing = _webView2Service.State.Phase is not ("Failed" or "Ready" or "Idle");
+                _mainWindow.ShowOnboarding(true, BuildWebView2Detail(), repairing);
             }
         }
 
@@ -1043,6 +1378,12 @@ public partial class App : Application
         }
 
         Log("updating privately managed DSH package");
+        if (!await ConfirmInterruptionAsync("更新 DSH Runtime"))
+        {
+            Log("managed Runtime update cancelled by user (running sessions)");
+            return;
+        }
+
         _isStarting = true;
         UpdateServiceUi();
         try
@@ -1122,7 +1463,8 @@ public partial class App : Application
         var updateLine = _serviceManager?.NeedsRuntimeUpdate == true
             ? $"\n版本提示：当前 {_serviceManager.InstalledPackageVersion}，建议更新到 {DshSharpCompatibility.DefaultDshVersion}"
             : "";
-        return $"● {RuntimeBaseUrl}\n运行时：{modeText}\n数据目录：{_serviceManager?.DshHomeDirectory ?? "未初始化"}\n状态：{status}{updateLine}{errorLine}";
+        var nodeLine = $"\nNode：{_serviceManager?.ActiveNodeDescription ?? "未检查"}";
+        return $"● {RuntimeBaseUrl}\n运行时：{modeText}{nodeLine}\n数据目录：{_serviceManager?.DshHomeDirectory ?? "未初始化"}\n状态：{status}{updateLine}{errorLine}";
     }
 
     private string BuildOnboardingDetail()
@@ -1158,11 +1500,8 @@ public partial class App : Application
                 return;
             }
 
-            if (Settings.Theme != "System")
-            {
-                return;
-            }
-
+            // 主题桥仅记录 WebUI 外观供诊断/将来参考，不再驱动壳——
+            // System 档的壳跟随 Windows 深浅（实时），WebUI 主题由 web 自己管理。
             Dispatcher.UIThread.Post(() =>
             {
                 var theme = source switch
@@ -1171,7 +1510,11 @@ public partial class App : Application
                     "light" => "Light",
                     _ => "System",
                 };
-                ApplyTheme(theme);
+                if (Settings.LastWebTheme != theme)
+                {
+                    Settings.LastWebTheme = theme;
+                    Log($"web theme observed: {theme} (recorded, not applied to shell)");
+                }
             });
         }
         catch (Exception ex) when (ex is System.Text.Json.JsonException)
@@ -1184,6 +1527,12 @@ public partial class App : Application
         }
     }
 
+    /// <summary>
+    /// 应用外观：显式 Light/Dark 直接生效；System 解析为具体值（上次 WebUI 外观优先——
+    /// 窗口主体是 WebUI，与它一致比与 OS 一致更重要；无历史读系统注册表）。
+    /// 品牌色板随解析结果直接写入 Resources，DynamicResource 即时重取——
+    /// 启动首帧与运行中切换（设置页、主题桥）走同一条路径。
+    /// </summary>
     private static void ApplyTheme(string theme)
     {
         var current = Application.Current;
@@ -1192,13 +1541,70 @@ public partial class App : Application
             return;
         }
 
-        var variant = theme switch
+        var resolved = theme switch
         {
-            "Light" => ThemeVariant.Light,
-            "Dark" => ThemeVariant.Dark,
-            _ => ThemeVariant.Default,
+            "Light" => "Light",
+            "Dark" => "Dark",
+            _ => ResolveSystemTheme(),
         };
-        current.RequestedThemeVariant = variant;
-        Log($"theme applied: {theme} -> {variant}");
+        current.RequestedThemeVariant = resolved == "Dark" ? ThemeVariant.Dark : ThemeVariant.Light;
+        var palette = resolved == "Dark" ? Services.ShellPalettes.Dark : Services.ShellPalettes.Light;
+        foreach (var (key, value) in palette)
+        {
+            current.Resources[key] = value;
+        }
+
+        _lastAppliedTheme = theme;
+        Log($"theme applied: {theme} -> {resolved}");
+    }
+
+    /// <summary>最近一次已应用的主题设置。设置页持有活设置实例（保存回调传入同一引用），
+    /// 对象 diff 永远为假——主题变化必须对照实际生效值判断。</summary>
+    private static string? _lastAppliedTheme;
+
+    /// <summary>System 主题实时跟随：Avalonia PlatformSettings 的 ColorValuesChanged
+    /// 在 Windows 深浅切换时触发（内部即 WM_SETTINGCHANGE），System 档下即时重新解析。</summary>
+    private static void StartSystemThemeWatcher()
+    {
+        var platform = Application.Current?.PlatformSettings;
+        if (platform is null)
+        {
+            return;
+        }
+
+        platform.ColorValuesChanged += (_, _) =>
+        {
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (Instance?.Settings.Theme == "System")
+                {
+                    Log("system color values changed -> re-applying System theme");
+                    ApplyTheme("System");
+                }
+            });
+        };
+    }
+
+    /// <summary>System 档的具体化：读取 Windows 系统浅色/深色注册表值。</summary>
+    private static string ResolveSystemTheme()
+    {
+        try
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
+                    @"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
+                if (key?.GetValue("AppsUseLightTheme") is int light)
+                {
+                    return light == 1 ? "Light" : "Dark";
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+        {
+            // 读不了注册表：按浅色兜底。
+        }
+
+        return "Light";
     }
 }

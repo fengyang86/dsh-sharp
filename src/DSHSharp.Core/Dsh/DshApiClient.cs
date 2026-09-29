@@ -21,6 +21,9 @@ public sealed class DshApiClient
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(8);
 
     private readonly DshAuthSession _auth;
+    // 缓存的 RPC 客户端：会话刷新/回合查询高频调用，逐次 new HttpClient 会反复建拆连接。
+    // 401 重换认证时作废重建（cookie 容器跟随认证会话）。
+    private HttpClient? _client;
 
     public DshApiClient(string baseUrl)
         : this(new DshAuthSession(baseUrl))
@@ -30,6 +33,31 @@ public sealed class DshApiClient
     public DshApiClient(DshAuthSession auth)
     {
         _auth = auth;
+    }
+
+    private HttpClient GetClient()
+    {
+        var client = Volatile.Read(ref _client);
+        if (client is not null)
+        {
+            return client;
+        }
+
+        var created = new HttpClient(_auth.CreateHandler()) { Timeout = RequestTimeout };
+        var winner = Interlocked.CompareExchange(ref _client, created, null);
+        if (winner is not null)
+        {
+            created.Dispose(); // 并发竞争的落败实例：即刻释放。
+            return winner;
+        }
+
+        return created;
+    }
+
+    private void ResetClient()
+    {
+        var client = Interlocked.Exchange(ref _client, null);
+        client?.Dispose();
     }
 
     /// <summary>获取会话列表（session/list），按最近更新排序。</summary>
@@ -90,7 +118,8 @@ public sealed class DshApiClient
         {
             try
             {
-                using var response = await Services.HttpFallback.GetAsync(registry, RequestTimeout, ct: ct);
+                using var fetched = await Services.HttpFallback.GetAsync(registry, RequestTimeout, ct: ct);
+                using var response = fetched.Response;
                 response.EnsureSuccessStatusCode();
                 var json = await response.Content.ReadAsStringAsync(ct);
                 var version = DshRpcParser.ParseNpmLatestVersion(json);
@@ -169,7 +198,7 @@ public sealed class DshApiClient
 
     private async Task<string> PostRpcAsync(string method, object payload, CancellationToken ct)
     {
-        var response = await SendAsync(method, payload, allowReauth: true, ct);
+        using var response = await SendAsync(method, payload, allowReauth: true, ct);
         response.EnsureSuccessStatusCode();
         return await response.Content.ReadAsStringAsync(ct);
     }
@@ -190,17 +219,14 @@ public sealed class DshApiClient
         };
         var content = new StringContent(JsonSerializer.Serialize(request), Encoding.UTF8, "application/json");
 
-        using var http = new HttpClient(_auth.CreateHandler())
-        {
-            Timeout = RequestTimeout,
-        };
-        // Origin 无 query，相对拼接不会丢失认证信息。
-        var response = await http.PostAsync(new Uri(_auth.Origin, $"api/{method}"), content, ct);
+        var response = await GetClient().PostAsync(new Uri(_auth.Origin, $"api/{method}"), content, ct);
         if (response.StatusCode == HttpStatusCode.Unauthorized && allowReauth)
         {
             response.Dispose();
-            // runtime 重启或端口漂移会使旧 cookie 失效：重新交换一次再试。
+            // runtime 重启或端口漂移会使旧 cookie 失效：丢弃缓存客户端（旧 cookie 容器），
+            // 重新交换一次再试。
             _auth.Reset();
+            ResetClient();
             return await SendAsync(method, payload, allowReauth: false, ct);
         }
 

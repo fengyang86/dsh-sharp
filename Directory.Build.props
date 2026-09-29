@@ -6,6 +6,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Deterministic>true</Deterministic>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- 版本单源：全仓唯一版本号。各 csproj 不再声明版本，运行时经 AssemblyInformationalVersion 读取。 -->
+    <Version>0.2.8</Version>
   </PropertyGroup>
 
 </Project>

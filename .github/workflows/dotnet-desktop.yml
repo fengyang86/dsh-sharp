@@ -41,7 +41,7 @@ jobs:
         if: matrix.configuration == 'Release'
         shell: pwsh
         run: |
-          $ver = (Select-String -Path src/DSHSharp.Core/Compatibility/DshSharpCompatibility.cs -Pattern 'ProductVersion = "([^"]+)"').Matches[0].Groups[1].Value
+          $ver = (Select-String -Path Directory.Build.props -Pattern '<Version>([^<]+)</Version>').Matches[0].Groups[1].Value
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) { $iscc = "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" }
           & $iscc packaging/windows/dshsharp.iss /DAppVersion=$ver "/DPayloadDir=$env:GITHUB_WORKSPACE\artifacts\ci\windows-x64" "/DOutputDir=$env:GITHUB_WORKSPACE\artifacts\ci\installer"

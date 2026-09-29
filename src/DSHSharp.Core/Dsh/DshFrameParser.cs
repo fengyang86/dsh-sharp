@@ -11,26 +11,103 @@ namespace DSHSharp.Core.Dsh;
 public static class DshFrameParser
 {
     /// <summary>
+    /// 单次解析 remote.mux 的 emit 帧，在 JsonDocument 生命周期内按事件名回调
+    /// <paramref name="onEmit"/>（args 元素随回调有效，不可逃逸保存）。
+    /// 非 emit 帧或格式错误不回调。事件流是全应用最热的路径，每帧只 Parse 一次。
+    /// </summary>
+    public static void DispatchEmitFrame(string json, Action<string, JsonElement> onEmit)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            if (root.TryGetProperty("type", out var typeEl) is false || typeEl.GetString() != "item" ||
+                root.TryGetProperty("value", out var value) is false ||
+                value.TryGetProperty("type", out var valueType) is false || valueType.GetString() != "emit" ||
+                value.TryGetProperty("event", out var evt) is false || evt.GetString() is not { } eventName ||
+                value.TryGetProperty("args", out var args) is false)
+            {
+                return;
+            }
+
+            onEmit(eventName, args);
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
+        {
+            // 非 JSON 帧或格式错误：忽略。
+        }
+    }
+
+    /// <summary>
+    /// 单次解析旧版 events.mux 的 session/event 帧，回调 <paramref name="onSessionEvent"/>
+    /// （(sessionId, 事件类型, 事件元素)，元素随回调有效）。非 session/event 帧不回调。
+    /// </summary>
+    public static void DispatchLegacyFrame(string json, Action<string, string, JsonElement> onSessionEvent)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var payload = GetPayload(doc.RootElement);
+            if (payload is null ||
+                payload.Value.TryGetProperty("type", out var type) is false || type.GetString() != "session/event" ||
+                payload.Value.TryGetProperty("sessionId", out var sessionId) is false ||
+                sessionId.GetString() is not { } id ||
+                payload.Value.TryGetProperty("event", out var evt) is false ||
+                evt.TryGetProperty("type", out var evtType) is false || evtType.GetString() is not { } eventType)
+            {
+                return;
+            }
+
+            onSessionEvent(id, eventType, evt);
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
+        {
+            // 非 JSON 帧或格式错误：忽略。
+        }
+    }
+
+    /// <summary>从 session/title 事件元素提取标题；非标题事件返回 null。</summary>
+    internal static string? ExtractTitle(JsonElement evt)
+    {
+        return evt.TryGetProperty("data", out var data) &&
+               data.TryGetProperty("title", out var title)
+            ? title.GetString()
+            : null;
+    }
+
+    /// <summary>从 turn/end 事件元素提取 reason.kind（data.reason.kind）；缺失返回 null。</summary>
+    internal static string? ExtractTurnEndReason(JsonElement evt)
+    {
+        return evt.TryGetProperty("data", out var data) &&
+               data.TryGetProperty("reason", out var reason) &&
+               reason.TryGetProperty("kind", out var kind)
+            ? kind.GetString()
+            : null;
+    }
+
+    /// <summary>
     /// 解析 <c>api-session/status</c> emit 帧：args 为 <c>[sessionId, isRunning]</c>。
     /// 会话运行状态翻转（true→false 即一轮完成）。其他事件或格式错误返回 null。
     /// </summary>
     public static SessionStatusInfo? TryParseSessionStatus(string json)
     {
-        return WithEmitArgs<SessionStatusInfo>(json, "api-session/status", static args =>
+        return WithEmitArgs<SessionStatusInfo>(json, "api-session/status", static args => ExtractStatusArgs(args));
+    }
+
+    internal static SessionStatusInfo? ExtractStatusArgs(JsonElement args)
+    {
+        if (args.ValueKind != JsonValueKind.Array || args.GetArrayLength() < 2)
         {
-            if (args.ValueKind != JsonValueKind.Array || args.GetArrayLength() < 2)
-            {
-                return null;
-            }
+            return null;
+        }
 
-            var sessionId = args[0].GetString();
-            if (sessionId is null || args[1].ValueKind is not (JsonValueKind.True or JsonValueKind.False))
-            {
-                return null;
-            }
+        var sessionId = args[0].GetString();
+        if (sessionId is null || args[1].ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+        {
+            return null;
+        }
 
-            return new SessionStatusInfo(sessionId, args[1].GetBoolean());
-        });
+        return new SessionStatusInfo(sessionId, args[1].GetBoolean());
     }
 
     /// <summary>
@@ -39,32 +116,42 @@ public static class DshFrameParser
     /// </summary>
     public static SessionAddedInfo? TryParseSessionAdded(string json)
     {
-        return WithEmitArgs<SessionAddedInfo>(json, "api-session/added", static args =>
+        return WithEmitArgs<SessionAddedInfo>(json, "api-session/added", static args => ExtractAddedArgs(args));
+    }
+
+    internal static SessionAddedInfo? ExtractAddedArgs(JsonElement args)
+    {
+        if (args.ValueKind != JsonValueKind.Array || args.GetArrayLength() < 1 || args[0].ValueKind != JsonValueKind.Object)
         {
-            if (args.ValueKind != JsonValueKind.Array || args.GetArrayLength() < 1 || args[0].ValueKind != JsonValueKind.Object)
-            {
-                return null;
-            }
+            return null;
+        }
 
-            var summary = args[0];
-            if (summary.TryGetProperty("sessionId", out var idEl) is false || idEl.GetString() is not { } sessionId)
-            {
-                return null;
-            }
+        var summary = args[0];
+        if (summary.TryGetProperty("sessionId", out var idEl) is false || idEl.GetString() is not { } sessionId)
+        {
+            return null;
+        }
 
-            JsonElement values = default;
-            var hasProjections = summary.TryGetProperty("projections", out var projections) &&
-                                 projections.TryGetProperty("values", out values);
-            var title = hasProjections && values.TryGetProperty("title", out var titleEl)
-                ? titleEl.GetString()
-                : null;
-            var asOfSeq = hasProjections && projections.TryGetProperty("asOfSeq", out var seqEl) &&
-                          seqEl.ValueKind == JsonValueKind.Number
-                ? seqEl.GetInt64()
-                : 0L;
-            var running = summary.TryGetProperty("running", out var runningEl) && runningEl.ValueKind == JsonValueKind.True;
-            return new SessionAddedInfo(sessionId, title, running, asOfSeq);
-        });
+        JsonElement values = default;
+        var hasProjections = summary.TryGetProperty("projections", out var projections) &&
+                             projections.TryGetProperty("values", out values);
+        var title = hasProjections && values.TryGetProperty("title", out var titleEl)
+            ? titleEl.GetString()
+            : null;
+        var asOfSeq = hasProjections && projections.TryGetProperty("asOfSeq", out var seqEl) &&
+                      seqEl.ValueKind == JsonValueKind.Number
+            ? seqEl.GetInt64()
+            : 0L;
+        var running = summary.TryGetProperty("running", out var runningEl) && runningEl.ValueKind == JsonValueKind.True;
+        return new SessionAddedInfo(sessionId, title, running, asOfSeq);
+    }
+
+    /// <summary>解析 <c>api-session/removed</c> emit 帧的 args（<c>[sessionId]</c>）；格式不符返回 null。</summary>
+    internal static string? ExtractRemovedArgs(JsonElement args)
+    {
+        return args.ValueKind == JsonValueKind.Array && args.GetArrayLength() >= 1
+            ? args[0].GetString()
+            : null;
     }
 
     /// <summary>解析 <c>api-session/removed</c> emit 帧：args 为 <c>[sessionId]</c>。</summary>

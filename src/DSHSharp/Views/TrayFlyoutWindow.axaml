@@ -1,0 +1,117 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        x:Class="DSHSharp.Views.TrayFlyoutWindow"
+        Title="DSH-Sharp"
+        Width="256" MaxHeight="460" SizeToContent="Height"
+        SystemDecorations="None" ShowInTaskbar="False"
+        TransparencyLevelHint="Transparent"
+        Background="Transparent"
+        WindowStartupLocation="Manual">
+
+    <Window.Styles>
+        <Style Selector="Border.tf-root">
+            <Setter Property="Background" Value="{DynamicResource ChromeBarBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource ChromeBorderBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="12"/>
+            <Setter Property="BoxShadow" Value="0 8 28 #66000000"/>
+        </Style>
+        <Style Selector="TextBlock.tf-title">
+            <Setter Property="FontSize" Value="15"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="{DynamicResource ChromeForegroundBrush}"/>
+        </Style>
+        <Style Selector="TextBlock.tf-sub">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Foreground" Value="{DynamicResource ChromeForegroundDimBrush}"/>
+        </Style>
+        <Style Selector="TextBlock.tf-group">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="{DynamicResource ChromeForegroundDimBrush}"/>
+        </Style>
+        <Style Selector="Border.tf-action">
+            <Setter Property="Background" Value="{DynamicResource ChromeHoverBrush}"/>
+            <Setter Property="CornerRadius" Value="8"/>
+            <Setter Property="Padding" Value="10,9"/>
+        </Style>
+        <Style Selector="Border.tf-action:pointerover">
+            <Setter Property="Opacity" Value="0.82"/>
+        </Style>
+        <Style Selector="TextBlock.tf-action-text">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="{DynamicResource ChromeForegroundBrush}"/>
+        </Style>
+        <Style Selector="Border.tf-session">
+            <Setter Property="Padding" Value="10,8"/>
+            <Setter Property="CornerRadius" Value="6"/>
+        </Style>
+        <Style Selector="Border.tf-session:pointerover">
+            <Setter Property="Background" Value="{DynamicResource ChromeHoverBrush}"/>
+        </Style>
+        <Style Selector="TextBlock.tf-session-title">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Foreground" Value="{DynamicResource ChromeForegroundBrush}"/>
+            <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+        </Style>
+    </Window.Styles>
+
+    <Border Classes="tf-root" Margin="14">
+        <Grid RowDefinitions="Auto,Auto,Auto,Auto">
+
+            <!-- 头部：标识 + 状态 -->
+            <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto" Margin="16,12,16,10">
+                <TextBlock Grid.Column="0" Text="🐋" FontSize="22" VerticalAlignment="Center"/>
+                <StackPanel Grid.Column="1" Margin="10,0,0,0" Spacing="1" VerticalAlignment="Center">
+                    <TextBlock Classes="tf-title" Text="DSH-Sharp"/>
+                    <TextBlock x:Name="StatusText" Classes="tf-sub" Text="…"/>
+                </StackPanel>
+                <Ellipse x:Name="StatusDot" Grid.Column="2" Width="9" Height="9"
+                         VerticalAlignment="Center" Fill="#3DD66E"/>
+            </Grid>
+
+            <!-- 快捷动作 -->
+            <Grid Grid.Row="1" ColumnDefinitions="*,*" ColumnSpacing="8" Margin="12,0,12,8">
+                <Border x:Name="OpenMainAction" Grid.Column="0" Classes="tf-action">
+                    <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center">
+                        <TextBlock Text="🗔" FontSize="14" VerticalAlignment="Center"
+                                   Foreground="{DynamicResource ChromeForegroundBrush}"/>
+                        <TextBlock Classes="tf-action-text" Text="主窗口"/>
+                    </StackPanel>
+                </Border>
+                <Border x:Name="SettingsAction" Grid.Column="1" Classes="tf-action">
+                    <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center">
+                        <TextBlock Text="＋" FontSize="14" VerticalAlignment="Center"
+                                   Foreground="{DynamicResource ChromeForegroundBrush}"/>
+                        <TextBlock Classes="tf-action-text" Text="设置"/>
+                    </StackPanel>
+                </Border>
+            </Grid>
+
+            <!-- 最近会话 -->
+            <StackPanel Grid.Row="2" Margin="12,2,12,4" Spacing="2">
+                <TextBlock Classes="tf-group" Text="最近会话" Margin="6,0,0,4"/>
+                <ScrollViewer>
+                    <StackPanel x:Name="SessionList" Spacing="1"/>
+                </ScrollViewer>
+            </StackPanel>
+
+            <!-- 底部：Runtime 状态 + 退出 -->
+            <Border Grid.Row="3" BorderBrush="{DynamicResource ChromeBorderBrush}" BorderThickness="0,1,0,0"
+                    Padding="12,10,12,12" CornerRadius="0,0,12,12">
+                <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="8">
+                    <Button x:Name="NewSessionButton" Grid.Column="0" Content="＋ 会话" Padding="10,4" FontSize="12"/>
+                    <TextBlock x:Name="RuntimeText" Grid.Column="1" Classes="tf-sub"
+                               VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                    <Button x:Name="RuntimeButton" Grid.Column="2" Content="启动" Padding="12,4" FontSize="12"/>
+                    <Button x:Name="ExitButton" Grid.Column="3" Content="退出" Padding="12,4" FontSize="12"/>
+                </Grid>
+            </Border>
+
+        </Grid>
+    </Border>
+</Window>

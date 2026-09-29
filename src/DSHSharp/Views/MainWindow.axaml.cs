@@ -14,6 +14,8 @@ public partial class MainWindow : Window
 {
     private readonly AppSettings _settings;
     private ToastWindow? _toast;
+    // WebView 惰性创建：缺 WebView2 运行时的机器上控件初始化会失败，必须保证窗口与引导页先活下来。
+    private NativeWebView? _webView;
 
     /// <summary>供 XAML 运行时加载器/设计器使用。</summary>
     public MainWindow()
@@ -25,20 +27,52 @@ public partial class MainWindow : Window
     {
         _settings = settings;
         InitializeComponent();
-        Web.IsVisible = false;
+        SplashVersionText.Text = $"v{DSHSharp.Core.Compatibility.DshSharpCompatibility.ProductVersion}";
+
+        // 主题化诊断（排查用）：窗口 variant 与过场背景在构造期的实际解析值。
+        Opened += (_, _) =>
+        {
+            var bg = SplashPanel.Background as Avalonia.Media.LinearGradientBrush;
+            var stop = bg?.GradientStops is { Count: > 0 } stops ? stops[0].Color.ToString() : "null";
+            App.Log($"splash theme probe: window-actual={ActualThemeVariant}, splash-stop0={stop}");
+        };
 
         var viewModel = new MainWindowViewModel(settings);
         DataContext = viewModel;
 
-        // 外链分流：非 WebUI 自身的目标交给系统，内嵌视图只承载 DSH。
-        Web.NavigationStarted += OnWebViewNavigationStarted;
-        Web.NewWindowRequested += OnWebViewNewWindowRequested;
-        // 主题桥：WebUI 经 chrome.webview.postMessage 上报主题选择，壳在 System 模式下镜像。
-        Web.WebMessageReceived += OnWebMessageReceived;
-
         WindowStateProperty.Changed.AddClassHandler<Window>(OnWindowStateChanged);
         Opened += (_, _) => RestoreWindowState();
         Closing += OnClosing;
+    }
+
+    /// <summary>
+    /// 按需创建 WebView（幂等）。创建失败（典型：WebView2 运行时缺失）返回 false，
+    /// 引导页保持可见并显示安装/修复进度；运行时装好后下一次调用会重建成功。
+    /// </summary>
+    public bool TryPrepareWebView()
+    {
+        if (_webView is not null)
+        {
+            return true;
+        }
+
+        try
+        {
+            var web = new NativeWebView { IsVisible = false };
+            // 外链分流：非 WebUI 自身的目标交给系统，内嵌视图只承载 DSH。
+            web.NavigationStarted += OnWebViewNavigationStarted;
+            web.NewWindowRequested += OnWebViewNewWindowRequested;
+            // 主题桥：WebUI 经 chrome.webview.postMessage 上报主题选择，壳在 System 模式下镜像。
+            web.WebMessageReceived += OnWebMessageReceived;
+            WebHost.Child = web;
+            _webView = web;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            App.Log($"webview initialization failed: {ex.Message}");
+            return false;
+        }
     }
 
     /// <summary>当前 Runtime 的源（scheme+host+port）；未知时为 null，分流策略届时全部放行内嵌。</summary>
@@ -75,7 +109,10 @@ public partial class MainWindow : Window
         if (e.Request is { } request && !ExternalLinkPolicy.ShouldOpenExternally(request, CurrentRuntimeOrigin()))
         {
             // 指向 WebUI 自身的新窗口没有独立认证上下文，就地导航主视图。
-            Web.Source = request;
+            if (_webView is not null)
+            {
+                _webView.Source = request;
+            }
             return;
         }
 
@@ -156,16 +193,28 @@ public partial class MainWindow : Window
     }
 
     /// <summary>服务离线时隐藏 WebView（其原生表面会遮挡引导页），在线时恢复。</summary>
-    public void SetWebViewVisible(bool visible) => Web.IsVisible = visible;
-
-    /// <summary>重载 WebView 到新地址（服务地址切换）。</summary>
-    public void ReloadWeb(string url)
+    public void SetWebViewVisible(bool visible)
     {
+        if (_webView is not null)
+        {
+            _webView.IsVisible = visible;
+        }
+    }
+
+    /// <summary>重载 WebView 到新地址（服务地址切换）。WebView 尚不可用时返回 false，由调用方保持引导页。</summary>
+    public bool ReloadWeb(string url)
+    {
+        if (!TryPrepareWebView())
+        {
+            return false;
+        }
+
         // WebView2 可能仍停留在上一次无令牌导航；先清空再设置，确保认证地址真正触发新导航。
-        Web.Source = new Uri("about:blank");
-        Web.Source = new Uri(url);
-        Web.IsVisible = true;
+        _webView!.Source = new Uri("about:blank");
+        _webView.Source = new Uri(url);
+        _webView.IsVisible = true;
         App.Log($"webview navigation: {url}");
+        return true;
     }
 
     /// <summary>通过会话插件接收托盘传入的会话 ID。</summary>
@@ -181,7 +230,13 @@ public partial class MainWindow : Window
             hash += $"&{App.BuildPluginFeatureHash(app.Settings)}";
         }
 
-        Web.Source = new Uri($"{baseUrl.TrimEnd('/')}#{hash}");
+        if (_webView is null)
+        {
+            App.Log($"webview unavailable; session navigation skipped: {sessionId}");
+            return;
+        }
+
+        _webView.Source = new Uri($"{baseUrl.TrimEnd('/')}#{hash}");
         App.Log($"webview navigate to session: {sessionId}");
     }
 
@@ -191,7 +246,13 @@ public partial class MainWindow : Window
         var app = App.Instance;
         var baseUrl = app?.RuntimeUrl ?? AppSettings.DefaultWebUrl;
         var hash = app is not null ? $"#{App.BuildPluginFeatureHash(app.Settings)}" : string.Empty;
-        Web.Source = new Uri($"{baseUrl.TrimEnd('/')}/{hash}");
+        if (_webView is null)
+        {
+            App.Log("webview unavailable; home navigation skipped");
+            return;
+        }
+
+        _webView.Source = new Uri($"{baseUrl.TrimEnd('/')}/{hash}");
         App.Log("webview navigate home");
     }
 
@@ -206,7 +267,13 @@ public partial class MainWindow : Window
             hash += $"&{App.BuildPluginFeatureHash(app.Settings)}";
         }
 
-        Web.Source = new Uri($"{baseUrl.TrimEnd('/')}#{hash}");
+        if (_webView is null)
+        {
+            App.Log($"webview unavailable; plugin hash navigation skipped: {pluginKey}");
+            return;
+        }
+
+        _webView.Source = new Uri($"{baseUrl.TrimEnd('/')}#{hash}");
         App.Log($"webview plugin hash navigation: {pluginKey}");
     }
 
@@ -228,6 +295,49 @@ public partial class MainWindow : Window
                 ? "停止 DSH Runtime"
                 : "重试启动";
     }
+
+    /// <summary>显示/隐藏"安全模式重启"按钮（仅故障态且有第三方插件激活时由 App 控制）。</summary>
+    public void SetSafeModeOffer(bool offer) => SafeModeButton.IsVisible = offer;
+
+    // 过场渐隐中标记：避免重复调度或覆盖随后而来的重新显示。
+    private bool _splashFading;
+
+    /// <summary>
+    /// 启动过场控制：显示立即生效；隐藏先渐隐 0.4s（Opacity Transition）再收起，
+    /// 避免 WebUI 就绪瞬间的硬切。仅 UI 线程调用。
+    /// </summary>
+    public void ShowSplash(bool show)
+    {
+        if (show)
+        {
+            _splashFading = false;
+            SplashPanel.Opacity = 1;
+            SplashPanel.IsVisible = true;
+            return;
+        }
+
+        if (!SplashPanel.IsVisible || _splashFading)
+        {
+            return;
+        }
+
+        _splashFading = true;
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(450));
+            await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                if (_splashFading)
+                {
+                    SplashPanel.IsVisible = false;
+                    _splashFading = false;
+                }
+            });
+        });
+    }
+
+    private void SafeModeButton_OnClick(object? sender, RoutedEventArgs e) =>
+        _ = App.Instance?.RestartInSafeModeAsync();
 
     private void StartServiceButton_OnClick(object? sender, RoutedEventArgs e)
     {

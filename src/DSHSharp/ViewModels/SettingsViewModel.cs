@@ -280,7 +280,7 @@ public partial class SettingsViewModel : ViewModelBase
         SelectedProfile = Profiles[Math.Min(index, Profiles.Count - 1)];
     }
 
-    /// <summary>保存全部配置与通用设置，并重建连接（激活配置内容变化即时生效）。</summary>
+    /// <summary>应用全部配置并即时生效（主题、自启动等立即切换）；窗口保持打开，可继续调整。</summary>
     [RelayCommand]
     private void Save()
     {
@@ -293,8 +293,6 @@ public partial class SettingsViewModel : ViewModelBase
         _settings.Theme = Theme;
 
         _save(_settings);
-
-        CloseRequested?.Invoke();
     }
 
     /// <summary>把选中的配置设为激活并立即切换（无需整体保存）。</summary>

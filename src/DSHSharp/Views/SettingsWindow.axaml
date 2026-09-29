@@ -3,12 +3,12 @@
         xmlns:vm="using:DSHSharp.ViewModels"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        mc:Ignorable="d" d:DesignWidth="760" d:DesignHeight="580"
+        mc:Ignorable="d" d:DesignWidth="780" d:DesignHeight="600"
         x:Class="DSHSharp.Views.SettingsWindow"
         x:DataType="vm:SettingsViewModel"
         Title="DSH-Sharp 设置"
-        Width="760" Height="580"
-        MinWidth="640" MinHeight="480"
+        Width="780" Height="600"
+        MinWidth="680" MinHeight="500"
         WindowStartupLocation="CenterOwner"
         Icon="/Assets/avalonia-logo.ico">
 
@@ -16,85 +16,161 @@
         <vm:SettingsViewModel/>
     </Design.DataContext>
 
+    <Window.Styles>
+        <!-- 通用：分组卡片与设置行（全部面板共用） -->
+        <Style Selector="Border.s-card">
+            <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundChromeLowBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource SystemControlForegroundBaseLowBrush}"/>
+            <Setter Property="CornerRadius" Value="8"/>
+            <Setter Property="Padding" Value="2"/>
+        </Style>
+        <Style Selector="Border.s-row">
+            <Setter Property="Padding" Value="14,12"/>
+        </Style>
+        <Style Selector="Border.s-row.s-sep">
+            <Setter Property="BorderThickness" Value="0,0,0,1"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource SystemControlForegroundBaseLowBrush}"/>
+        </Style>
+        <Style Selector="TextBlock.s-title">
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+        </Style>
+        <Style Selector="TextBlock.s-desc">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="Foreground" Value="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+        </Style>
+        <!-- 页面标题与小节标签 -->
+        <Style Selector="TextBlock.s-page-title">
+            <Setter Property="FontSize" Value="18"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+        </Style>
+        <Style Selector="TextBlock.s-page-desc">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="Foreground" Value="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+        </Style>
+        <Style Selector="TextBlock.s-group">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+        </Style>
+        <!-- 左侧导航：圆角高亮的悬停/选中态 -->
+        <Style Selector="ListBoxItem.nav">
+            <Setter Property="Padding" Value="12,9"/>
+            <Setter Property="FontSize" Value="13"/>
+        </Style>
+        <Style Selector="ListBoxItem.nav /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="CornerRadius" Value="6"/>
+        </Style>
+        <Style Selector="ListBoxItem.nav:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource SystemControlHighlightListLowBrush}"/>
+            <Setter Property="CornerRadius" Value="6"/>
+        </Style>
+        <Style Selector="ListBoxItem.nav:selected /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource SystemControlHighlightListMediumBrush}"/>
+            <Setter Property="CornerRadius" Value="6"/>
+        </Style>
+        <Style Selector="ListBoxItem.nav:selected">
+            <Setter Property="FontWeight" Value="SemiBold"/>
+        </Style>
+    </Window.Styles>
+
     <DockPanel Margin="0">
 
         <!-- ===== 底部操作栏 ===== -->
         <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8"
                     Margin="16,12,16,14">
             <Button Content="恢复默认" Padding="14,6" Command="{Binding RestoreDefaultsCommand}"/>
-            <Button Content="保存" Padding="20,6" Command="{Binding SaveCommand}"/>
-            <Button Content="取消" Padding="20,6" Command="{Binding CancelCommand}"/>
+            <Button Content="取消" Padding="16,6" Command="{Binding CancelCommand}"/>
+            <Button Classes="accent" Content="应用" Padding="22,6" Command="{Binding SaveCommand}"/>
         </StackPanel>
 
         <!-- ===== 左侧导航 ===== -->
-        <Border DockPanel.Dock="Left" Width="170"
+        <Border DockPanel.Dock="Left" Width="180"
                 Background="{DynamicResource SystemControlBackgroundChromeMediumLowBrush}"
                 BorderThickness="0,0,1,0"
                 BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}">
-            <ListBox ItemsSource="{Binding Sections}" SelectedItem="{Binding SelectedSection}"
-                     Margin="8" Background="Transparent">
-                <ListBox.ItemTemplate>
-                    <DataTemplate>
-                        <TextBlock Text="{Binding}" Padding="10,8" FontSize="13"/>
-                    </DataTemplate>
-                </ListBox.ItemTemplate>
-            </ListBox>
+            <StackPanel Margin="10,14,10,12" Spacing="6">
+                <TextBlock Text="设置" FontSize="15" FontWeight="SemiBold" Margin="6,0,0,8"/>
+                <ListBox Classes="nav" ItemsSource="{Binding Sections}" SelectedItem="{Binding SelectedSection}"
+                         Background="Transparent" Padding="0">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding}"/>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </StackPanel>
         </Border>
 
         <!-- ===== 内容区 ===== -->
         <ScrollViewer>
-            <StackPanel Margin="20,16,20,16" Spacing="16">
+            <StackPanel Margin="22,18,22,16" Spacing="16">
 
-                <!-- ===== 面板：私有 Runtime ===== -->
-                <StackPanel IsVisible="{Binding ShowProfiles}" Spacing="14">
-
-                    <Border Padding="12,10" CornerRadius="6" BorderThickness="1"
-                            BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}">
-                        <StackPanel Spacing="8">
-                            <TextBlock Text="DSH 运行时" FontSize="16" FontWeight="SemiBold"/>
-                            <TextBlock Text="{Binding ServiceStatusText}" FontSize="12"
-                                       TextWrapping="Wrap" LineHeight="18"/>
-                            <TextBlock Text="DSH-Sharp 只运行并连接私有目录中的官方 DSH Runtime。外部服务和源码部署不会被探测、修改或停止。"
-                                       FontSize="12" TextWrapping="Wrap" LineHeight="18"
-                                       Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
-                            <StackPanel Orientation="Horizontal" Spacing="8">
-                                <Button Content="启动运行时" Padding="12,4" FontSize="12"
-                                        Command="{Binding StartServiceCommand}"/>
-                                <Button Content="停止运行时" Padding="12,4" FontSize="12"
-                                        Command="{Binding StopServiceCommand}"/>
-                            </StackPanel>
+                <!-- ===== 面板：运行时 ===== -->
+                <StackPanel IsVisible="{Binding ShowProfiles}" Spacing="16">
+                    <StackPanel Spacing="2">
+                        <TextBlock Classes="s-page-title" Text="运行时"/>
+                        <TextBlock Classes="s-page-desc" Text="私有 DSH Runtime 的状态与控制。"/>
+                    </StackPanel>
+                    <Border Classes="s-card">
+                        <StackPanel>
+                            <Border Classes="s-row s-sep">
+                                <StackPanel Spacing="4">
+                                    <TextBlock Classes="s-title" Text="服务状态"/>
+                                    <TextBlock Classes="s-desc" Text="{Binding ServiceStatusText}" LineHeight="18"/>
+                                </StackPanel>
+                            </Border>
+                            <Border Classes="s-row">
+                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+                                    <StackPanel Grid.Column="0" Spacing="3">
+                                        <TextBlock Classes="s-title" Text="服务控制"/>
+                                        <TextBlock Classes="s-desc"
+                                                   Text="DSH-Sharp 只运行并连接私有目录中的官方 DSH Runtime；外部服务与源码部署不会被探测、修改或停止。"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                        <Button Content="启动运行时" Padding="14,5" FontSize="12"
+                                                Command="{Binding StartServiceCommand}"/>
+                                        <Button Content="停止运行时" Padding="14,5" FontSize="12"
+                                                Command="{Binding StopServiceCommand}"/>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
                         </StackPanel>
                     </Border>
                 </StackPanel>
 
                 <!-- ===== 面板：插件 ===== -->
-                <StackPanel IsVisible="{Binding ShowPlugins}" Spacing="12" x:CompileBindings="False">
-                    <TextBlock Text="插件" FontSize="16" FontWeight="SemiBold"/>
-                    <TextBlock Text="这里列出当前 DSH profile 已安装的插件。内置插件由客户端维护，第三方插件可停用或卸载；修改后需重启 DSH 服务生效。"
-                               FontSize="12" TextWrapping="Wrap" Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+                <StackPanel IsVisible="{Binding ShowPlugins}" Spacing="14" x:CompileBindings="False">
+                    <StackPanel Spacing="2">
+                        <TextBlock Classes="s-page-title" Text="插件"/>
+                        <TextBlock Classes="s-page-desc"
+                                   Text="当前 DSH profile 已安装的插件。内置插件由客户端维护；第三方插件可停用或卸载。"/>
+                    </StackPanel>
                     <ItemsControl ItemsSource="{Binding Plugins}">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
-                                <Border Padding="10" Margin="0,0,0,8" BorderThickness="1" CornerRadius="4"
-                                        BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}">
-                                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
-                                        <StackPanel Spacing="3">
-                                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold"/>
-                                            <TextBlock Text="{Binding Description}" FontSize="12" TextWrapping="Wrap"/>
-                                            <StackPanel Orientation="Horizontal" Spacing="2">
-                                                <TextBlock Text="版本" FontSize="11"/>
-                                                <TextBlock Text="{Binding Version}" FontSize="11"/>
-                                                <TextBlock Text="·" FontSize="11"/>
-                                                <TextBlock Text="{Binding IsActive, StringFormat=激活：{0}}" FontSize="11"/>
+                                <Border Classes="s-card" Margin="0,0,0,8">
+                                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12" Margin="14,12">
+                                        <StackPanel Grid.Column="0" Spacing="3">
+                                            <TextBlock Classes="s-title" Text="{Binding Name}"/>
+                                            <TextBlock Classes="s-desc" Text="{Binding Description}"/>
+                                            <StackPanel Orientation="Horizontal" Spacing="5" Margin="0,1,0,0">
+                                                <TextBlock Text="版本" FontSize="11"
+                                                           Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+                                                <TextBlock Text="{Binding Version}" FontSize="11"
+                                                           Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
                                             </StackPanel>
                                         </StackPanel>
-                                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                                             <ToggleSwitch Command="{Binding $parent[ItemsControl].DataContext.TogglePluginCommand}"
                                                           CommandParameter="{Binding}" IsChecked="{Binding IsActive}"
-                                                          OffContent="未激活" OnContent="已激活"
                                                           IsHitTestVisible="{Binding !IsBundled, FallbackValue=True}"
                                                           Focusable="{Binding !IsBundled, FallbackValue=True}"/>
-                                            <Button Content="卸载" Command="{Binding $parent[ItemsControl].DataContext.RemovePluginCommand}"
+                                            <Button Content="卸载" Padding="12,4"
+                                                    Command="{Binding $parent[ItemsControl].DataContext.RemovePluginCommand}"
                                                     CommandParameter="{Binding}" IsVisible="{Binding !IsBundled, FallbackValue=True}"/>
                                         </StackPanel>
                                     </Grid>
@@ -102,82 +178,224 @@
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
-                    <TextBlock Text="内置会话插件功能" FontWeight="SemiBold" Margin="0,8,0,0"/>
-                    <TextBlock Text="这些开关控制 DSH-Sharp 内置会话增强功能；修改后需重启 DSH 服务生效。"
-                               FontSize="12" TextWrapping="Wrap" Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
-                    <ToggleSwitch Content="Esc 停止当前会话" IsChecked="{Binding SessionPluginEscStopEnabled}"/>
-                    <ToggleSwitch Content="会话右键复制会话 ID" IsChecked="{Binding SessionPluginCopyIdEnabled}"/>
-                    <ToggleSwitch Content="工作区右键在资源管理器中打开" IsChecked="{Binding SessionPluginOpenWorkspaceEnabled}"/>
-                    <ToggleSwitch Content="托盘最近会话跳转" IsChecked="{Binding SessionPluginTrayNavigationEnabled}"/>
-                </StackPanel>
-
-                <!-- ===== 面板：通用 ===== -->
-                <StackPanel IsVisible="{Binding ShowGeneral}" Spacing="10">
-                    <TextBlock Text="通用" FontSize="16" FontWeight="SemiBold"/>
-                    <ToggleSwitch Content="登录时自启动" IsChecked="{Binding AutoStartEnabled}"/>
-                    <ToggleSwitch Content="关闭窗口时最小化到托盘" IsChecked="{Binding CloseToTray}"/>
-                    <ToggleSwitch Content="启动时最小化到托盘" IsChecked="{Binding StartMinimized}"/>
-                    <ToggleSwitch Content="会话完成时弹出通知" IsChecked="{Binding SessionCompleteNotifications}"/>
-                    <ToggleSwitch Content="通知附带提示音" IsChecked="{Binding NotificationSoundEnabled}"/>
-                    <StackPanel Spacing="6" Margin="0,8,0,0" MaxWidth="260">
-                        <TextBlock Text="主题" FontSize="12"/>
-                        <ComboBox ItemsSource="{Binding Themes}" SelectedItem="{Binding Theme}"
-                                  HorizontalAlignment="Stretch"/>
-                    </StackPanel>
-                </StackPanel>
-
-                <!-- ===== 面板：关于 ===== -->
-                <StackPanel IsVisible="{Binding ShowAbout}" Spacing="10">
-                    <TextBlock Text="版本与更新" FontSize="16" FontWeight="SemiBold"/>
-                    <TextBlock Text="DSH-Sharp 客户端" FontSize="14" FontWeight="SemiBold" Margin="0,6,0,0"/>
-                    <TextBlock Text="{Binding AboutText}" FontSize="13" LineHeight="22" TextWrapping="Wrap"/>
-                    <StackPanel Spacing="6" x:CompileBindings="False">
-                        <TextBlock Text="{Binding ClientUpdateStatusText}" FontSize="12" TextWrapping="Wrap" LineHeight="18"
-                                   Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
-                        <ProgressBar IsVisible="{Binding ClientUpdateDownloading}"
-                                     IsIndeterminate="{Binding ClientUpdateIndeterminate}"
-                                     Maximum="100" Value="{Binding ClientUpdatePercent}" Height="4"/>
-                        <TextBlock Text="{Binding ClientUpdateError}" FontSize="12" TextWrapping="Wrap"
-                                   IsVisible="{Binding ClientUpdateRetryable}"
-                                   Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
-                        <StackPanel Orientation="Horizontal" Spacing="8">
-                            <Button Content="升级并重启" Padding="14,5"
-                                    IsVisible="{Binding ClientUpdateReady}"
-                                    Command="{Binding InstallClientUpdateCommand}"/>
-                            <Button Content="重试" Padding="14,5"
-                                    IsVisible="{Binding ClientUpdateRetryable}"
-                                    Command="{Binding RetryClientUpdateCommand}"/>
-                            <Button Content="检查客户端更新" Padding="14,5"
-                                    Command="{Binding CheckClientUpdateNowCommand}"/>
+                    <TextBlock Classes="s-group" Text="内置会话插件功能" Margin="2,4,0,0"/>
+                    <Border Classes="s-card">
+                        <StackPanel>
+                            <Border Classes="s-row s-sep">
+                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+                                    <StackPanel Grid.Column="0" Spacing="3">
+                                        <TextBlock Classes="s-title" Text="Esc 停止当前会话"/>
+                                        <TextBlock Classes="s-desc" Text="在会话界面按 Esc 中断正在运行的回合。"/>
+                                    </StackPanel>
+                                    <ToggleSwitch Grid.Column="1" VerticalAlignment="Center" IsChecked="{Binding SessionPluginEscStopEnabled}"/>
+                                </Grid>
+                            </Border>
+                            <Border Classes="s-row s-sep">
+                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+                                    <StackPanel Grid.Column="0" Spacing="3">
+                                        <TextBlock Classes="s-title" Text="会话右键复制会话 ID"/>
+                                        <TextBlock Classes="s-desc" Text="会话右键菜单提供复制会话 ID，便于外发排查。"/>
+                                    </StackPanel>
+                                    <ToggleSwitch Grid.Column="1" VerticalAlignment="Center" IsChecked="{Binding SessionPluginCopyIdEnabled}"/>
+                                </Grid>
+                            </Border>
+                            <Border Classes="s-row s-sep">
+                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+                                    <StackPanel Grid.Column="0" Spacing="3">
+                                        <TextBlock Classes="s-title" Text="工作区右键在资源管理器中打开"/>
+                                        <TextBlock Classes="s-desc" Text="工作区右键直达系统资源管理器。"/>
+                                    </StackPanel>
+                                    <ToggleSwitch Grid.Column="1" VerticalAlignment="Center" IsChecked="{Binding SessionPluginOpenWorkspaceEnabled}"/>
+                                </Grid>
+                            </Border>
+                            <Border Classes="s-row">
+                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+                                    <StackPanel Grid.Column="0" Spacing="3">
+                                        <TextBlock Classes="s-title" Text="托盘最近会话跳转"/>
+                                        <TextBlock Classes="s-desc" Text="托盘最近会话列表点击直达对应会话。"/>
+                                    </StackPanel>
+                                    <ToggleSwitch Grid.Column="1" VerticalAlignment="Center" IsChecked="{Binding SessionPluginTrayNavigationEnabled}"/>
+                                </Grid>
+                            </Border>
                         </StackPanel>
-                        <ToggleSwitch Content="自动检查客户端更新并预下载升级包"
-                                      IsChecked="{Binding ClientUpdateCheckEnabled}" Margin="0,2,0,0"/>
+                    </Border>
+                    <TextBlock Classes="s-page-desc" Text="插件与功能开关修改后需重启 DSH 服务生效。"/>
+                </StackPanel>
+
+                <!-- ===== 面板：偏好设置 ===== -->
+                <StackPanel IsVisible="{Binding ShowGeneral}" Spacing="16">
+                    <StackPanel Spacing="2">
+                        <TextBlock Classes="s-page-title" Text="偏好设置"/>
+                        <TextBlock Classes="s-page-desc" Text="外观、启动行为与通知偏好；调整后点击右下角应用生效。"/>
                     </StackPanel>
-                    <Separator Margin="0,4"/>
-                    <TextBlock Text="DSH Runtime" FontSize="14" FontWeight="SemiBold"/>
-                    <TextBlock Text="DSH Runtime 由独立 npm 包发布，安装在 DSH-Sharp 私有目录中。客户端与运行时分别发布和更新；运行时更新不会清除私有会话、插件和设置。"
-                               FontSize="12" TextWrapping="Wrap" LineHeight="18"
-                               Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
-                    <TextBlock Text="{Binding VersionInfoText}" FontSize="12" TextWrapping="Wrap" LineHeight="18"/>
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Button Content="检查 Runtime 版本" Padding="14,5" Command="{Binding CheckUpdateCommand}"/>
-                        <Button Content="更新 Runtime" Padding="14,5" Command="{Binding UpdateServiceCommand}"
-                                IsEnabled="{Binding CanUpdateOfficialPackage}"/>
+
+                    <StackPanel Spacing="6">
+                        <TextBlock Classes="s-group" Text="外观" Margin="2,0,0,0"/>
+                        <Border Classes="s-card">
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16" Margin="14,12">
+                                <StackPanel Grid.Column="0" Spacing="3">
+                                    <TextBlock Classes="s-title" Text="主题"/>
+                                    <TextBlock Classes="s-desc"
+                                               Text="System：跟随 WebUI——WebUI 改主题时客户端即时跟随；浅色 / 深色：全端联动，客户端与 WebUI 一起切换并各自记忆。"/>
+                                </StackPanel>
+                                <ComboBox Grid.Column="1" Width="150" VerticalAlignment="Center"
+                                          ItemsSource="{Binding Themes}" SelectedItem="{Binding Theme}"/>
+                            </Grid>
+                        </Border>
                     </StackPanel>
-                    <Separator Margin="0,4"/>
-                    <TextBlock Text="数据维护" FontSize="14" FontWeight="SemiBold"/>
-                    <TextBlock Text="备份包含私有会话与配置（不含凭据与派生缓存）；诊断包含日志尾部（token 已脱敏）与版本清单，可安全外发。"
-                               FontSize="12" TextWrapping="Wrap" LineHeight="18"
-                               Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Button Content="备份会话数据" Padding="14,5" Command="{Binding BackupDataCommand}"/>
-                        <Button Content="导出诊断包" Padding="14,5" Command="{Binding ExportDiagnosticsCommand}"/>
-                        <Button Content="打开所在文件夹" Padding="14,5"
-                                IsVisible="{Binding MaintenanceResultAvailable}"
-                                Command="{Binding OpenMaintenanceZipCommand}"/>
+
+                    <StackPanel Spacing="6">
+                        <TextBlock Classes="s-group" Text="启动与窗口" Margin="2,0,0,0"/>
+                        <Border Classes="s-card">
+                            <StackPanel>
+                                <Border Classes="s-row s-sep">
+                                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+                                        <StackPanel Grid.Column="0" Spacing="3">
+                                            <TextBlock Classes="s-title" Text="登录时自启动"/>
+                                            <TextBlock Classes="s-desc" Text="开机后 DSH-Sharp 在后台静默运行，驻留托盘。"/>
+                                        </StackPanel>
+                                        <ToggleSwitch Grid.Column="1" VerticalAlignment="Center" IsChecked="{Binding AutoStartEnabled}"/>
+                                    </Grid>
+                                </Border>
+                                <Border Classes="s-row s-sep">
+                                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+                                        <StackPanel Grid.Column="0" Spacing="3">
+                                            <TextBlock Classes="s-title" Text="关闭窗口时最小化到托盘"/>
+                                            <TextBlock Classes="s-desc" Text="点击窗口关闭按钮时不退出，驻留托盘；需要退出时使用托盘菜单。"/>
+                                        </StackPanel>
+                                        <ToggleSwitch Grid.Column="1" VerticalAlignment="Center" IsChecked="{Binding CloseToTray}"/>
+                                    </Grid>
+                                </Border>
+                                <Border Classes="s-row">
+                                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+                                        <StackPanel Grid.Column="0" Spacing="3">
+                                            <TextBlock Classes="s-title" Text="启动时最小化到托盘"/>
+                                            <TextBlock Classes="s-desc" Text="客户端启动后不弹出主窗口，直接驻留托盘。"/>
+                                        </StackPanel>
+                                        <ToggleSwitch Grid.Column="1" VerticalAlignment="Center" IsChecked="{Binding StartMinimized}"/>
+                                    </Grid>
+                                </Border>
+                            </StackPanel>
+                        </Border>
                     </StackPanel>
-                    <TextBlock Text="{Binding MaintenanceMessage}" FontSize="12" TextWrapping="Wrap" LineHeight="18"
-                               Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+
+                    <StackPanel Spacing="6">
+                        <TextBlock Classes="s-group" Text="通知" Margin="2,0,0,0"/>
+                        <Border Classes="s-card">
+                            <StackPanel>
+                                <Border Classes="s-row s-sep">
+                                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+                                        <StackPanel Grid.Column="0" Spacing="3">
+                                            <TextBlock Classes="s-title" Text="会话完成通知"/>
+                                            <TextBlock Classes="s-desc" Text="回合结束时弹系统通知，点击直达对应会话；失败的回合会标注失败原因。"/>
+                                        </StackPanel>
+                                        <ToggleSwitch Grid.Column="1" VerticalAlignment="Center" IsChecked="{Binding SessionCompleteNotifications}"/>
+                                    </Grid>
+                                </Border>
+                                <Border Classes="s-row">
+                                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+                                        <StackPanel Grid.Column="0" Spacing="3">
+                                            <TextBlock Classes="s-title" Text="通知提示音"/>
+                                            <TextBlock Classes="s-desc" Text="会话完成通知附带提示音。"/>
+                                        </StackPanel>
+                                        <ToggleSwitch Grid.Column="1" VerticalAlignment="Center" IsChecked="{Binding NotificationSoundEnabled}"/>
+                                    </Grid>
+                                </Border>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </StackPanel>
+
+                <!-- ===== 面板：版本与更新 ===== -->
+                <StackPanel IsVisible="{Binding ShowAbout}" Spacing="14" x:CompileBindings="False">
+                    <StackPanel Spacing="2">
+                        <TextBlock Classes="s-page-title" Text="版本与更新"/>
+                        <TextBlock Classes="s-page-desc" Text="{Binding AboutText}" LineHeight="19"/>
+                    </StackPanel>
+
+                    <Border Classes="s-card">
+                        <StackPanel>
+                            <Border Classes="s-row s-sep">
+                                <StackPanel Spacing="6">
+                                    <TextBlock Classes="s-title" Text="客户端更新"/>
+                                    <TextBlock Classes="s-desc" Text="{Binding ClientUpdateStatusText}" LineHeight="18"/>
+                                    <ProgressBar IsVisible="{Binding ClientUpdateDownloading}"
+                                                 IsIndeterminate="{Binding ClientUpdateIndeterminate}"
+                                                 Maximum="100" Value="{Binding ClientUpdatePercent}" Height="4"/>
+                                    <TextBlock Classes="s-desc" Text="{Binding ClientUpdateError}"
+                                               IsVisible="{Binding ClientUpdateRetryable}"/>
+                                    <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,2,0,0">
+                                        <Button Content="升级并重启" Padding="14,5"
+                                                IsVisible="{Binding ClientUpdateReady}"
+                                                Command="{Binding InstallClientUpdateCommand}"/>
+                                        <Button Content="重试" Padding="14,5"
+                                                IsVisible="{Binding ClientUpdateRetryable}"
+                                                Command="{Binding RetryClientUpdateCommand}"/>
+                                        <Button Content="检查客户端更新" Padding="14,5"
+                                                Command="{Binding CheckClientUpdateNowCommand}"/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+                            <Border Classes="s-row">
+                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+                                    <StackPanel Grid.Column="0" Spacing="3">
+                                        <TextBlock Classes="s-title" Text="自动检查更新"/>
+                                        <TextBlock Classes="s-desc" Text="启动后定期检查并后台预下载升级包。"/>
+                                    </StackPanel>
+                                    <ToggleSwitch Grid.Column="1" VerticalAlignment="Center" IsChecked="{Binding ClientUpdateCheckEnabled}"/>
+                                </Grid>
+                            </Border>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Classes="s-card">
+                        <StackPanel>
+                            <Border Classes="s-row s-sep">
+                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+                                    <StackPanel Grid.Column="0" Spacing="3">
+                                        <TextBlock Classes="s-title" Text="DSH Runtime"/>
+                                        <TextBlock Classes="s-desc" Text="{Binding VersionInfoText}" LineHeight="18"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                        <Button Content="检查 Runtime 版本" Padding="14,5" Command="{Binding CheckUpdateCommand}"/>
+                                        <Button Content="更新 Runtime" Padding="14,5" Command="{Binding UpdateServiceCommand}"
+                                                IsEnabled="{Binding CanUpdateOfficialPackage}"/>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                            <Border Classes="s-row">
+                                <StackPanel Spacing="3">
+                                    <TextBlock Classes="s-title" Text="说明"/>
+                                    <TextBlock Classes="s-desc"
+                                               Text="DSH Runtime 由独立 npm 包发布，安装在 DSH-Sharp 私有目录中。客户端与运行时分别发布和更新；运行时更新不会清除私有会话、插件和设置。"/>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Classes="s-card">
+                        <StackPanel>
+                            <Border Classes="s-row s-sep">
+                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+                                    <StackPanel Grid.Column="0" Spacing="3">
+                                        <TextBlock Classes="s-title" Text="备份与诊断"/>
+                                        <TextBlock Classes="s-desc"
+                                                   Text="备份包含私有会话与配置（不含凭据与派生缓存）；诊断包含日志尾部（token 已脱敏）与版本清单，可安全外发。"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                        <Button Content="备份会话数据" Padding="14,5" Command="{Binding BackupDataCommand}"/>
+                                        <Button Content="导出诊断包" Padding="14,5" Command="{Binding ExportDiagnosticsCommand}"/>
+                                        <Button Content="打开所在文件夹" Padding="14,5"
+                                                IsVisible="{Binding MaintenanceResultAvailable}"
+                                                Command="{Binding OpenMaintenanceZipCommand}"/>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                            <Border Classes="s-row" IsVisible="{Binding MaintenanceMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                                <TextBlock Classes="s-desc" Text="{Binding MaintenanceMessage}" LineHeight="18"/>
+                            </Border>
+                        </StackPanel>
+                    </Border>
                 </StackPanel>
 
             </StackPanel>

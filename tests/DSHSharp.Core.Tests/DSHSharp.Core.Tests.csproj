@@ -20,6 +20,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\DSHSharp.Core\DSHSharp.Core.csproj" />
+    <ProjectReference Include="..\..\src\DSHSharp\DSHSharp.csproj" />
   </ItemGroup>
 
 </Project>

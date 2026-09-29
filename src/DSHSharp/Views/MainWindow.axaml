@@ -16,7 +16,7 @@
         WindowDecorations="BorderOnly">
 
     <Window.Styles>
-        <!-- 自定义标题栏窗口按钮 -->
+        <!-- 自定义标题栏窗口按钮：暗黑 Chrome 配色（与启动过场同色系） -->
         <Style Selector="Button.window-btn">
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="BorderThickness" Value="0"/>
@@ -28,10 +28,79 @@
             <Setter Property="Padding" Value="0"/>
         </Style>
         <Style Selector="Button.window-btn:pointerover /template/ ContentPresenter">
-            <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundBaseLowBrush}"/>
+            <Setter Property="Background" Value="{DynamicResource ChromeHoverBrush}"/>
         </Style>
         <Style Selector="Button.window-btn.close:pointerover /template/ ContentPresenter">
             <Setter Property="Background" Value="#C42B1C"/>
+        </Style>
+        <!-- 启动过场（固定暗黑风格，不随主题）：光晕呼吸 + 光环旋转 + 光条滑动 + 入场动画 -->
+        <Style Selector="Ellipse.splash-halo">
+            <Style.Animations>
+                <Animation Duration="0:0:2.4" IterationCount="INFINITE" Easing="CubicEaseInOut">
+                    <KeyFrame Cue="0%">
+                        <Setter Property="Opacity" Value="0.25"/>
+                    </KeyFrame>
+                    <KeyFrame Cue="50%">
+                        <Setter Property="Opacity" Value="0.6"/>
+                    </KeyFrame>
+                    <KeyFrame Cue="100%">
+                        <Setter Property="Opacity" Value="0.25"/>
+                    </KeyFrame>
+                </Animation>
+            </Style.Animations>
+        </Style>
+        <Style Selector="Ellipse.splash-ring">
+            <Style.Animations>
+                <Animation Duration="0:0:1.4" IterationCount="INFINITE">
+                    <KeyFrame Cue="100%">
+                        <Setter Property="RotateTransform.Angle" Value="360"/>
+                    </KeyFrame>
+                </Animation>
+            </Style.Animations>
+        </Style>
+        <Style Selector="Border.splash-shimmer">
+            <Style.Animations>
+                <Animation Duration="0:0:1.6" IterationCount="INFINITE" Easing="CubicEaseInOut">
+                    <KeyFrame Cue="0%">
+                        <Setter Property="TranslateTransform.X" Value="-96"/>
+                    </KeyFrame>
+                    <KeyFrame Cue="100%">
+                        <Setter Property="TranslateTransform.X" Value="236"/>
+                    </KeyFrame>
+                </Animation>
+            </Style.Animations>
+        </Style>
+        <!-- 中心内容入场：上浮 + 图标缩放放大（一次性） -->
+        <Style Selector="StackPanel.splash-content">
+            <Setter Property="Opacity" Value="0"/>
+            <Style.Animations>
+                <Animation Duration="0:0:0.5" FillMode="Forward" Easing="CubicEaseOut">
+                    <KeyFrame Cue="0%">
+                        <Setter Property="Opacity" Value="0"/>
+                        <Setter Property="TranslateTransform.Y" Value="14"/>
+                    </KeyFrame>
+                    <KeyFrame Cue="100%">
+                        <Setter Property="Opacity" Value="1"/>
+                        <Setter Property="TranslateTransform.Y" Value="0"/>
+                    </KeyFrame>
+                </Animation>
+            </Style.Animations>
+        </Style>
+        <Style Selector="Image.splash-logo">
+            <Style.Animations>
+                <Animation Duration="0:0:0.45" FillMode="Forward" Easing="CubicEaseOut">
+                    <KeyFrame Cue="0%">
+                        <Setter Property="Opacity" Value="0"/>
+                        <Setter Property="ScaleTransform.ScaleX" Value="0.72"/>
+                        <Setter Property="ScaleTransform.ScaleY" Value="0.72"/>
+                    </KeyFrame>
+                    <KeyFrame Cue="100%">
+                        <Setter Property="Opacity" Value="1"/>
+                        <Setter Property="ScaleTransform.ScaleX" Value="1"/>
+                        <Setter Property="ScaleTransform.ScaleY" Value="1"/>
+                    </KeyFrame>
+                </Animation>
+            </Style.Animations>
         </Style>
     </Window.Styles>
 
@@ -43,18 +112,19 @@
 
     <Grid RowDefinitions="36,*,Auto">
 
-        <!-- ===== 自定义标题栏（ElementRole=TitleBar 提供拖动） ===== -->
+        <!-- ===== 自定义标题栏（暗黑 Chrome，与过场同色系；ElementRole=TitleBar 提供拖动） ===== -->
         <Border Grid.Row="0"
                 chrome:WindowDecorationProperties.ElementRole="TitleBar"
-                Background="{DynamicResource SystemControlBackgroundChromeMediumBrush}"
+                Background="{DynamicResource ChromeBarBrush}"
                 DoubleTapped="TitleBar_OnDoubleTapped">
             <Grid ColumnDefinitions="Auto,*,Auto">
                 <StackPanel Grid.Column="0" Margin="12,0" Orientation="Horizontal" Spacing="8"
                             VerticalAlignment="Center">
                     <TextBlock Text="DSH-Sharp" FontSize="13" FontWeight="SemiBold"
+                               Foreground="{DynamicResource ChromeForegroundBrush}"
                                VerticalAlignment="Center"/>
                     <TextBlock Text="{Binding Version}" FontSize="11"
-                               Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"
+                               Foreground="{DynamicResource ChromeForegroundDimBrush}"
                                VerticalAlignment="Center"/>
                 </StackPanel>
 
@@ -64,14 +134,14 @@
                             Click="SettingsButton_OnClick"
                             ToolTip.Tip="设置">
                         <TextBlock Text="&#x2699;" FontSize="15"
-                                   Foreground="{DynamicResource SystemControlForegroundBaseHighBrush}"
+                                   Foreground="{DynamicResource ChromeForegroundBrush}"
                                    VerticalAlignment="Center"/>
                     </Button>
                     <Button Classes="window-btn"
                             chrome:WindowDecorationProperties.ElementRole="User"
                             Click="MinimizeButton_OnClick"
                             ToolTip.Tip="最小化">
-                        <Path Data="M 0,0 L 10,0" Stroke="{DynamicResource SystemControlForegroundBaseHighBrush}"
+                        <Path Data="M 0,0 L 10,0" Stroke="{DynamicResource ChromeForegroundBrush}"
                               StrokeThickness="1.2" VerticalAlignment="Center"/>
                     </Button>
                     <Button x:Name="MaximizeButton" Classes="window-btn"
@@ -80,12 +150,12 @@
                             ToolTip.Tip="最大化">
                         <Grid Width="10" Height="10">
                             <Path x:Name="MaximizeIcon" Data="M 0.5,0.5 L 9.5,0.5 L 9.5,9.5 L 0.5,9.5 Z"
-                                  Stroke="{DynamicResource SystemControlForegroundBaseHighBrush}"
+                                  Stroke="{DynamicResource ChromeForegroundBrush}"
                                   StrokeThickness="1.2" VerticalAlignment="Center"/>
                             <!-- 还原图标：前后两个重叠方框 -->
                             <Path x:Name="RestoreIcon" IsVisible="False"
                                   Data="M 3,1 L 9,1 L 9,7 L 3,7 Z M 1,3 L 7,3 L 7,9 L 1,9 Z"
-                                  Stroke="{DynamicResource SystemControlForegroundBaseHighBrush}"
+                                  Stroke="{DynamicResource ChromeForegroundBrush}"
                                   StrokeThickness="1.2" VerticalAlignment="Center"/>
                         </Grid>
                     </Button>
@@ -94,45 +164,106 @@
                             Click="CloseButton_OnClick"
                             ToolTip.Tip="关闭">
                         <Path Data="M 0,0 L 10,10 M 10,0 L 0,10"
-                              Stroke="{DynamicResource SystemControlForegroundBaseHighBrush}"
+                              Stroke="{DynamicResource ChromeForegroundBrush}"
                               StrokeThickness="1.2" VerticalAlignment="Center"/>
                     </Button>
                 </StackPanel>
             </Grid>
         </Border>
 
-        <!-- ===== DSH WebUI ===== -->
-        <Border Grid.Row="1">
-            <NativeWebView x:Name="Web"/>
+        <!-- ===== DSH WebUI（惰性创建：缺 WebView2 运行时时窗口与引导页仍可用） ===== -->
+        <Border Grid.Row="1" x:Name="WebHost"/>
+
+        <!-- ===== 启动过场（暗黑品牌动画层：Z 序在故障页之下，启动中显示、就绪渐隐） ===== -->
+        <Border x:Name="SplashPanel" Grid.Row="1" IsVisible="True">
+            <Border.Background>
+                <DynamicResource ResourceKey="SplashBackgroundBrush"/>
+            </Border.Background>
+            <Border.Transitions>
+                <Transitions>
+                    <DoubleTransition Property="Opacity" Duration="0:0:0.4" Easing="CubicEaseOut"/>
+                </Transitions>
+            </Border.Transitions>
+            <StackPanel Classes="splash-content" VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="22"
+                        RenderTransformOrigin="0.5,0.5">
+                <StackPanel.RenderTransform>
+                    <TranslateTransform/>
+                </StackPanel.RenderTransform>
+                <Grid Width="196" Height="196" HorizontalAlignment="Center">
+                    <Ellipse Classes="splash-halo" Width="196" Height="196">
+                        <Ellipse.Fill>
+                            <DynamicResource ResourceKey="SplashHaloBrush"/>
+                        </Ellipse.Fill>
+                    </Ellipse>
+                    <Ellipse Classes="splash-ring" Width="152" Height="152"
+                             Stroke="{DynamicResource SplashRingStrokeBrush}" StrokeThickness="2.5"
+                             StrokeDashArray="96,381"
+                             RenderTransformOrigin="0.5,0.5">
+                        <Ellipse.RenderTransform>
+                            <RotateTransform/>
+                        </Ellipse.RenderTransform>
+                    </Ellipse>
+                    <Image Classes="splash-logo" Source="/Assets/splash-logo.png"
+                           Width="104" Height="104"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                           RenderTransformOrigin="0.5,0.5">
+                        <Image.RenderTransform>
+                            <ScaleTransform/>
+                        </Image.RenderTransform>
+                    </Image>
+                </Grid>
+                <StackPanel HorizontalAlignment="Center" Spacing="5">
+                    <TextBlock Text="DSH-Sharp" FontSize="24" FontWeight="SemiBold"
+                               Foreground="{DynamicResource SplashTitleBrush}" LetterSpacing="2" HorizontalAlignment="Center"/>
+                    <TextBlock x:Name="SplashVersionText" FontSize="11" HorizontalAlignment="Center"
+                               Foreground="{DynamicResource SplashVersionBrush}" LetterSpacing="1"/>
+                </StackPanel>
+                <Grid Width="224" Height="3" HorizontalAlignment="Center" Margin="0,6,0,0">
+                    <Border Background="{DynamicResource SplashTrackBrush}" CornerRadius="1.5"/>
+                    <Border Classes="splash-shimmer" Width="88" Height="3" CornerRadius="1.5"
+                            HorizontalAlignment="Left" RenderTransformOrigin="0.5,0.5">
+                        <Border.Background>
+                            <DynamicResource ResourceKey="SplashShimmerBrush"/>
+                        </Border.Background>
+                        <Border.RenderTransform>
+                            <TranslateTransform/>
+                        </Border.RenderTransform>
+                    </Border>
+                </Grid>
+            </StackPanel>
         </Border>
 
-        <!-- ===== Runtime 启动/故障页（覆盖 WebView） ===== -->
+        <!-- ===== Runtime 启动/故障页（覆盖 WebView 与过场；暗黑 Chrome 同色系） ===== -->
         <Border x:Name="OnboardingPanel" Grid.Row="1" IsVisible="False"
-                Background="{DynamicResource SystemControlBackgroundChromeMediumLowBrush}">
+                Background="{DynamicResource OnboardingBackgroundBrush}">
             <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="14" MaxWidth="460"
                         Margin="32">
                 <TextBlock Text="正在准备 DSH Runtime" FontSize="20" FontWeight="SemiBold"
+                           Foreground="{DynamicResource ChromeForegroundBrush}"
                            HorizontalAlignment="Center"/>
                 <TextBlock x:Name="OnboardingDetailText" TextWrapping="Wrap" TextAlignment="Center"
-                           FontSize="13" Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+                           FontSize="13" Foreground="{DynamicResource OnboardingDetailBrush}"/>
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="8">
                     <Button x:Name="StartServiceButton" Content="重试启动" Padding="16,6"
                             Click="StartServiceButton_OnClick"/>
                     <Button Content="重新尝试" Padding="16,6" Click="RetryProbeButton_OnClick"/>
+                    <Button x:Name="SafeModeButton" Content="安全模式重启" Padding="16,6" IsVisible="False"
+                            ToolTip.Tip="停用全部第三方插件后重启 Runtime（保留插件安装，之后可在设置页逐个重新启用）"
+                            Click="SafeModeButton_OnClick"/>
                 </StackPanel>
             </StackPanel>
         </Border>
 
-        <!-- ===== 状态栏 ===== -->
+        <!-- ===== 状态栏（暗黑 Chrome，与过场/标题栏同色系） ===== -->
         <Border Grid.Row="2" Padding="12,5"
-                Background="{DynamicResource SystemControlBackgroundChromeMediumBrush}"
+                Background="{DynamicResource ChromeBarBrush}"
                 BorderThickness="0,1,0,0"
-                BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}">
+                BorderBrush="{DynamicResource ChromeBorderBrush}">
             <StackPanel Orientation="Horizontal" Spacing="7">
                 <Ellipse Width="8" Height="8" VerticalAlignment="Center"
                          Fill="{Binding ServiceStatusBrush}"/>
                 <TextBlock Text="{Binding ServiceStatusText}" FontSize="12"
-                           Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+                           Foreground="{DynamicResource ChromeStatusTextBrush}"/>
             </StackPanel>
         </Border>
 

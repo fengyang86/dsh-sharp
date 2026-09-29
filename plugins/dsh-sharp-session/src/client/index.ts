@@ -1,6 +1,7 @@
 import { installSessionNavigation, installSessionShortcuts, readFeatureFlags, type ShortcutSessions } from './shortcut.ts'
 import { createSessionSwitcher } from './switcher.ts'
 import { installThemeBridge } from './theme-bridge.ts'
+import { installThemeReceiver } from './theme-apply.ts'
 import { openWorkspacePath, type ShortcutConnection } from './workspace-open.ts'
 import { ContextMenuView } from './ContextMenuView.tsx'
 import { createMenuStore } from './menu-store.ts'
@@ -52,6 +53,10 @@ export function apply(ctx: ShortcutContext): void {
   ctx.effect(
     () => installThemeBridge(),
     'dsh-sharp-session: theme bridge to host shell',
+  )
+  ctx.effect(
+    () => installThemeReceiver(ctx),
+    'dsh-sharp-session: theme receiver from host shell',
   )
   ctx.slots.inject('shell.overlay', () => ctx.slots.register(
     {

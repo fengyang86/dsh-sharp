@@ -3,6 +3,27 @@ using System.Net;
 
 namespace DSHSharp.Core.Services;
 
+/// <summary>HttpFallback 请求结果：同时持有响应与为其创建的 HttpClient（代理链路每候选一个），
+/// 调用方 using 释放，避免成功路径泄漏 handler。</summary>
+public sealed class HttpFallbackResult : IDisposable
+{
+    public HttpFallbackResult(HttpClient client, HttpResponseMessage response)
+    {
+        Client = client;
+        Response = response;
+    }
+
+    public HttpClient Client { get; }
+
+    public HttpResponseMessage Response { get; }
+
+    public void Dispose()
+    {
+        Response.Dispose();
+        Client.Dispose();
+    }
+}
+
 /// <summary>
 /// 受限网络环境下的外网 HTTP 访问回退链：
 /// 直连 → 系统代理 → git 配置代理 → 环境变量代理 → 常见本地代理端口。
@@ -94,9 +115,10 @@ public static class HttpFallback
         return new HttpClient(handler) { Timeout = timeout };
     }
 
-    /// <summary>按回退链 GET；返回响应（含已缓存的可用链路）。rangeFrom &gt; 0 时携带 HTTP Range（断点续传）。
+    /// <summary>按回退链 GET；返回持有响应与其专属 HttpClient 的结果（含已缓存的可用链路），
+    /// 调用方负责 Dispose。rangeFrom &gt; 0 时携带 HTTP Range（断点续传）。
     /// 全部失败抛最后一次异常。</summary>
-    public static async Task<HttpResponseMessage> GetAsync(string url, TimeSpan timeout, string? userAgent = null, long? rangeFrom = null, CancellationToken ct = default)
+    public static async Task<HttpFallbackResult> GetAsync(string url, TimeSpan timeout, string? userAgent = null, long? rangeFrom = null, CancellationToken ct = default)
     {
         var candidates = BuildProxyCandidates();
         var start = _cachedIndex >= 0 && _cachedIndex < candidates.Count ? _cachedIndex : 0;
@@ -131,7 +153,7 @@ public static class HttpFallback
                 }
 
                 Volatile.Write(ref _cachedIndex, index);
-                return response;
+                return new HttpFallbackResult(http, response);
             }
             catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or InvalidOperationException)
             {

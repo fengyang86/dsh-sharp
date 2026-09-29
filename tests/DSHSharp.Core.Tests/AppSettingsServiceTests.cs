@@ -31,6 +31,8 @@ public sealed class AppSettingsServiceTests : IDisposable
             CloseToTray = false,
             StartMinimized = true,
             Theme = "Dark",
+            LastWebTheme = "Light",
+            ClientUpdateCheckEnabled = false,
             SessionCompleteNotifications = false,
             NotificationSoundEnabled = false,
         };
@@ -43,6 +45,8 @@ public sealed class AppSettingsServiceTests : IDisposable
         Assert.False(loaded.CloseToTray);
         Assert.True(loaded.StartMinimized);
         Assert.Equal("Dark", loaded.Theme);
+        Assert.Equal("Light", loaded.LastWebTheme);          // 启动期外观预测的依据
+        Assert.False(loaded.ClientUpdateCheckEnabled);       // 曾漏在持久化投影外
         Assert.False(loaded.SessionCompleteNotifications);
         Assert.False(loaded.NotificationSoundEnabled);
     }

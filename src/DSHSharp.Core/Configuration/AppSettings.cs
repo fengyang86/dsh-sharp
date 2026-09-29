@@ -39,6 +39,10 @@ public sealed class AppSettings
     /// <summary>主题：System / Light / Dark。</summary>
     public string Theme { get; set; } = "System";
 
+    /// <summary>上次会话 DSH WebUI 实际使用的外观（主题桥上报时回写）。
+    /// 壳设置为 System 时，启动期用它预测过场/Chrome 配色，避免首帧翻转。</summary>
+    public string? LastWebTheme { get; set; }
+
     /// <summary>会话完成时弹出桌面通知。</summary>
     public bool SessionCompleteNotifications { get; set; } = true;
 

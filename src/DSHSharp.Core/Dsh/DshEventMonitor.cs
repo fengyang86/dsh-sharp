@@ -121,6 +121,7 @@ public sealed class DshEventMonitor : IAsyncDisposable
         }
         Log?.Invoke("DshEventMonitor.Dispose: cancelling");
         _cts.Cancel();
+        _cts.Dispose(); // 同步路径兜底释放；CTS 双重 Dispose 安全，DisposeAsync 有 ObjectDisposed 守卫。
         Log?.Invoke("DshEventMonitor.Dispose: done");
     }
 
@@ -130,7 +131,14 @@ public sealed class DshEventMonitor : IAsyncDisposable
         Log?.Invoke("DshEventMonitor.DisposeAsync: cancelling");
         if (disposeNow)
         {
-            _cts.Cancel();
+            try
+            {
+                _cts.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                // 同步 Dispose 已先行释放。
+            }
         }
         try
         {
@@ -295,60 +303,68 @@ public sealed class DshEventMonitor : IAsyncDisposable
         }
 
         // 旧版 events.mux：session/title 缓存标题，turn/end + completed 触发完成。
-        var title = DshFrameParser.TryParseSessionTitle(json);
-        if (title is not null)
+        DshFrameParser.DispatchLegacyFrame(json, (sessionId, eventType, evt) =>
         {
-            _sessionTitles[title.Value.SessionId] = title.Value.Title;
-        }
-
-        var turnEnd = DshFrameParser.TryParseTurnEnd(json);
-        if (turnEnd is not null &&
-            string.Equals(turnEnd.Value.ReasonKind, "completed", StringComparison.Ordinal))
-        {
-            RaiseSessionCompleted(turnEnd.Value.SessionId);
-        }
+            if (eventType == "session/title" && DshFrameParser.ExtractTitle(evt) is { } title)
+            {
+                _sessionTitles[sessionId] = title;
+            }
+            else if (eventType == "turn/end" &&
+                     string.Equals(DshFrameParser.ExtractTurnEndReason(evt), "completed", StringComparison.Ordinal))
+            {
+                RaiseSessionCompleted(sessionId);
+            }
+        });
     }
 
-    /// <summary>处理 remote.mux 逻辑流的 item/end/error 帧。</summary>
+    /// <summary>处理 remote.mux 逻辑流的 item/end/error 帧：单次解析按事件名分发（热路径）。</summary>
     private void HandleMuxFrame(string json)
     {
-        var status = DshFrameParser.TryParseSessionStatus(json);
-        if (status is not null)
+        DshFrameParser.DispatchEmitFrame(json, (eventName, args) =>
         {
-            ApplyRunningState(status.Value.SessionId, status.Value.Running);
-            return;
-        }
-
-        var added = DshFrameParser.TryParseSessionAdded(json);
-        if (added is not null)
-        {
-            if (added.Value.Title is { } title)
+            switch (eventName)
             {
-                _sessionTitles[added.Value.SessionId] = title;
-            }
+                case "api-session/status":
+                    if (DshFrameParser.ExtractStatusArgs(args) is { } status)
+                    {
+                        ApplyRunningState(status.SessionId, status.Running);
+                    }
 
-            if (added.Value.AsOfSeq > 0)
-            {
-                _sessionSeqs[added.Value.SessionId] = added.Value.AsOfSeq;
-            }
+                    break;
+                case "api-session/added":
+                    if (DshFrameParser.ExtractAddedArgs(args) is { } added)
+                    {
+                        if (added.Title is { } title)
+                        {
+                            _sessionTitles[added.SessionId] = title;
+                        }
 
-            // added 摘要也带 running：与 status 事件共用边沿检测，避免错过任一来源的完成信号。
-            ApplyRunningState(added.Value.SessionId, added.Value.Running);
-            return;
-        }
+                        if (added.AsOfSeq > 0)
+                        {
+                            _sessionSeqs[added.SessionId] = added.AsOfSeq;
+                        }
 
-        var removed = DshFrameParser.TryParseSessionRemoved(json);
-        if (removed is not null)
-        {
-            var wasRunning = _runningSessions.TryGetValue(removed, out var running) && running;
-            _runningSessions.TryRemove(removed, out _);
-            _sessionTitles.TryRemove(removed, out _);
-            _sessionSeqs.TryRemove(removed, out _);
-            if (wasRunning)
-            {
-                RaiseRunningSessionsChanged();
+                        // added 摘要也带 running：与 status 事件共用边沿检测，避免错过任一来源的完成信号。
+                        ApplyRunningState(added.SessionId, added.Running);
+                    }
+
+                    break;
+                case "api-session/removed":
+                    if (DshFrameParser.ExtractRemovedArgs(args) is { } removed)
+                    {
+                        var wasRunning = _runningSessions.TryGetValue(removed, out var running) && running;
+                        _runningSessions.TryRemove(removed, out _);
+                        _sessionTitles.TryRemove(removed, out _);
+                        _sessionSeqs.TryRemove(removed, out _);
+                        if (wasRunning)
+                        {
+                            RaiseRunningSessionsChanged();
+                        }
+                    }
+
+                    break;
             }
-        }
+        });
     }
 
     /// <summary>
